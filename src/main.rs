@@ -10,10 +10,11 @@ use actix_web::client::Client;
 use actix_web::middleware::Logger;
 use env_logger;
 use futures::{Future, lazy};
-use log::info;
+use log::{info, error};
 
 use data::{get_state_info, update_state};
 use diesel::update;
+use crate::data::{StateInfo, RefreshError};
 
 mod schema;
 mod data;
@@ -32,10 +33,25 @@ fn main() -> io::Result<()> {
 
     let status = system.block_on(lazy(|| { get_state_info() }));
     match status {
-        Ok(_) => { info!("Done refreshing status") },
-        Err(err) => { panic!("Could not refresh status {}", err) }
+        Ok(state_info) => {
+            if state_info.info.is_none() {
+                if state_info.current_state.is_none() {
+                    panic!("Couldn't fetch data and no fallback");
+                } else {
+                    info!("Falling back");
+                }
+            } else {
+                info!("Updating state...");
+                let (url, hash) = state_info.info.unwrap();
+                match system.block_on(lazy(|| { update_state(hash, url) })) {
+                    Ok(_) => { info!("Successfuly updated state"); },
+                    Err(err) => { error!("Error while updating state: {}", err); },
+                }
+            }
+        },
+        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
+        Err(RefreshError::OldData) => { error!("Falling back"); }
     };
-//    let status = system.block_on(lazy(|| { update_state("1234".to_string(), "http://data.openaddresses.io/runs/655683/nl/countrywide.zip".to_string()) }));
 
     HttpServer::new(|| {
         App::new()

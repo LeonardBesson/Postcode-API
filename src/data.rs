@@ -30,6 +30,7 @@ impl std::fmt::Display for RefreshError {
     }
 }
 
+// TODO
 impl From<actix_web::client::SendRequestError> for RefreshError {
     fn from(error: actix_web::client::SendRequestError) -> Self {
         OldData
@@ -81,16 +82,15 @@ pub fn get_state_info() -> impl Future<Item = StateInfo, Error = RefreshError> {
                 .limit(1_048_576)
                 .from_err()
                 .map(|body| {
-                    let info = extract_state_url(body);
+                    let info = get_url_and_hash(body);
                     let connection = establish_connection();
                     let current_state = current_state(&connection);
-
                     StateInfo { info, current_state }
                 })
         })
 }
 
-fn extract_state_url(body: Bytes) -> Option<(String, String)> {
+fn get_url_and_hash(body: Bytes) -> Option<(String, String)> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(&body[..]);
@@ -121,8 +121,8 @@ fn current_state(connection: &PgConnection) -> Option<State> {
 }
 
 pub fn update_state(
+    url: String,
     state_hash: String,
-    url: String
 ) -> impl Future<Item = (), Error = data::RefreshError> {
     Client::default()
         .get(url)
@@ -133,7 +133,7 @@ pub fn update_state(
                 .limit(1_048_576_000_000)
                 .from_err()
                 .map(|body| {
-                    info!("body: {:#?}", body);
+                    info!("Downloaded zip: {:#?}", body);
                     ()
                 })
         })
