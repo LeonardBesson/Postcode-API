@@ -1,3 +1,7 @@
+#[macro_use]
+extern crate diesel;
+extern crate dotenv;
+
 use std::io;
 
 use actix::System;
@@ -11,6 +15,8 @@ use log::info;
 use data::fetch_status;
 
 mod data;
+mod db;
+mod models;
 
 fn index() -> impl Responder {
     HttpResponse::Ok().body("Hello world!")
