@@ -1,7 +1,7 @@
 use uuid::Uuid;
 use chrono::NaiveDateTime;
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct State {
     pub id: Uuid,
     pub hash: String,
