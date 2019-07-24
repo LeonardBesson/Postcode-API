@@ -5,15 +5,17 @@ extern crate dotenv;
 use std::io;
 
 use actix::System;
-use actix_web::{App, Error, HttpResponse, HttpServer, Responder, web};
+use actix_web::{App, HttpResponse, HttpServer, Responder, web};
 use actix_web::client::Client;
 use actix_web::middleware::Logger;
 use env_logger;
 use futures::{Future, lazy};
 use log::info;
 
-use data::fetch_status;
+use data::{get_state_info, update_state};
+use diesel::update;
 
+mod schema;
 mod data;
 mod db;
 mod models;
@@ -28,11 +30,12 @@ fn main() -> io::Result<()> {
 
     let mut system = System::new("postcode-service");
 
-    let status = system.block_on(lazy(|| { fetch_status() }));
+    let status = system.block_on(lazy(|| { get_state_info() }));
     match status {
-        Ok(body) => { info!("Done refreshing status: {}", body) },
+        Ok(_) => { info!("Done refreshing status") },
         Err(err) => { panic!("Could not refresh status {}", err) }
     };
+//    let status = system.block_on(lazy(|| { update_state("1234".to_string(), "http://data.openaddresses.io/runs/655683/nl/countrywide.zip".to_string()) }));
 
     HttpServer::new(|| {
         App::new()
