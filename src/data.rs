@@ -20,7 +20,7 @@ use postcode::AddressRecord;
 
 use crate::*;
 use crate::data::RefreshError::{NoData, OldData};
-use crate::db::establish_connection;
+use crate::db::Pool;
 use crate::models::{Address, NewAddress, NewState, State};
 use crate::schema::states::dsl::*;
 
@@ -91,18 +91,18 @@ pub struct StateInfo {
 }
 
 /// Returns true if the state was updated
-pub fn get_state_info() -> impl Future<Item = StateInfo, Error = RefreshError> {
+pub fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateInfo, Error = RefreshError> + 'a {
     Client::default()
         .get("http://results.openaddresses.io/state.txt")
         .send()
         .from_err()
-        .and_then(|mut resp| {
+        .and_then(move |mut resp| {
             resp.body()
                 .limit(STATE_BODY_LIMIT_BYTES)
                 .from_err()
-                .map(|body| {
+                .map(move |body| {
                     let info = get_info(body);
-                    let connection = establish_connection();
+                    let connection = pool.get().unwrap();
                     let current_state = current_state(&connection);
                     StateInfo { info, current_state }
                 })
@@ -139,11 +139,12 @@ fn current_state(connection: &PgConnection) -> Option<State> {
         .unwrap_or(None)
 }
 
-pub fn update_state(
+pub fn update_state<'a>(
+    pool: &'a Pool,
     address_count: usize,
     url: String,
     state_hash: String,
-) -> impl Future<Item = (), Error = RefreshError> {
+) -> impl Future<Item = (), Error = RefreshError> + 'a {
     info!("Downloading state from {}", url);
 
     Client::default()
@@ -168,7 +169,7 @@ pub fn update_state(
                         if re.is_match(file.name()) {
                             info!("Found csv file");
                             info!("Updating database records...");
-                            let conn = establish_connection();
+                            let conn = pool.get().unwrap();
                             let mut reader = csv::Reader::from_reader(file);
 
                             let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);

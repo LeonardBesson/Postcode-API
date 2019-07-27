@@ -19,7 +19,7 @@ use log::{error, info};
 use data::{get_state_info, update_state};
 
 use crate::data::{RefreshError, StateInfo};
-use crate::db::establish_connection;
+use crate::db::init_connection_pool;
 
 mod schema;
 mod data;
@@ -29,7 +29,7 @@ mod postcode;
 
 embed_migrations!("./migrations");
 
-fn index() -> impl Responder {
+fn addresses() -> impl Responder {
     HttpResponse::Ok().body("Hello world!")
 }
 
@@ -37,12 +37,12 @@ fn main() -> io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
 
-    let conn = establish_connection();
-    embedded_migrations::run(&conn);
+    let pool = init_connection_pool();
+    embedded_migrations::run(&pool.get().unwrap());
 
     let mut system = System::new("postcode-service");
 
-    let status = system.block_on(lazy(|| { get_state_info() }));
+    let status = system.block_on(lazy(|| { get_state_info(&pool) }));
     match status {
         Ok(state_info) => {
             match state_info.info {
@@ -56,7 +56,7 @@ fn main() -> io::Result<()> {
                         info!("Data already up to date (state: {})", state_hash);
                     } else {
                         info!("Updating data...");
-                        match system.block_on(lazy(|| { update_state(count, url, state_hash) })) {
+                        match system.block_on(lazy(|| { update_state(&pool, count, url, state_hash) })) {
                             Ok(_) => { info!("Successfuly updated data"); },
                             Err(err) => { error!("Error while updating state: {}", err); },
                         };
@@ -78,7 +78,7 @@ fn main() -> io::Result<()> {
     HttpServer::new(|| {
         App::new()
             .wrap(Logger::default())
-            .route("/", web::get().to(index))
+            .route("/addresses", web::get().to(addresses))
     })
     .bind("127.0.0.1:3000")?
     .start();
