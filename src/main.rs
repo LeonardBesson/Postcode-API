@@ -43,7 +43,7 @@ fn main() -> io::Result<()> {
             } else {
                 info!("Updating state...");
                 let (url, hash) = state_info.info.unwrap();
-                match system.block_on(lazy(|| { update_state(hash, url) })) {
+                match system.block_on(lazy(|| { update_state(url, hash) })) {
                     Ok(_) => { info!("Successfuly updated state"); },
                     Err(err) => { error!("Error while updating state: {}", err); },
                 }

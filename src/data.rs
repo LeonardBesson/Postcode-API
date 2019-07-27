@@ -11,6 +11,12 @@ use crate::data::RefreshError::{OldData, NoData};
 use std::fmt::Formatter;
 use futures::future::{err, ok, Either};
 use actix_web::web::Bytes;
+use std::io::Read;
+use zip::ZipArchive;
+use regex::Regex;
+
+const STATE_BODY_LIMIT_BYTES: usize = 2_097_152; // 2MB
+const ZIP_BODY_LIMIT_BYTES: usize = 1_074_000_000; // 1GB
 
 #[derive(Debug)]
 pub enum RefreshError {
@@ -18,6 +24,8 @@ pub enum RefreshError {
     NoData,
     /// Couldn't fetch new data but there is old data to fallback to
     OldData,
+
+    // TODO: add one with cause messsage
 }
 
 impl std::fmt::Display for RefreshError {
@@ -76,10 +84,10 @@ pub fn get_state_info() -> impl Future<Item = StateInfo, Error = RefreshError> {
     Client::default()
         .get("http://results.openaddresses.io/state.txt")
         .send()
-        .map_err(RefreshError::from)
+        .from_err()
         .and_then(|mut resp| {
             resp.body()
-                .limit(1_048_576)
+                .limit(STATE_BODY_LIMIT_BYTES)
                 .from_err()
                 .map(|body| {
                     let info = get_url_and_hash(body);
@@ -107,7 +115,7 @@ fn get_url_and_hash(body: Bytes) -> Option<(String, String)> {
         })
         .map(|record| {
             let r = record.unwrap();
-            (r[8].to_string(), r[10].to_string())
+            (r[8].to_owned(), r[10].to_owned())
         })
 }
 
@@ -123,17 +131,33 @@ fn current_state(connection: &PgConnection) -> Option<State> {
 pub fn update_state(
     url: String,
     state_hash: String,
-) -> impl Future<Item = (), Error = data::RefreshError> {
+) -> impl Future<Item = (), Error = RefreshError> {
+    info!("Downloading state from {}", url);
+
     Client::default()
         .get(url)
         .send()
         .map_err(RefreshError::from)
         .and_then(|mut resp| {
             resp.body()
-                .limit(1_048_576_000_000)
+                .limit(ZIP_BODY_LIMIT_BYTES)
                 .from_err()
                 .map(|body| {
-                    info!("Downloaded zip: {:#?}", body);
+                    info!("Downloaded zip, size: {} MB", body.len() / 1_000_000);
+                    info!("Searching for csv file");
+
+                    let mut reader = std::io::Cursor::new(body);
+                    let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
+                    let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
+                    for i in 0..zip.len()
+                    {
+                        let mut file = zip.by_index(i).unwrap();
+                        info!("Filename: {}", file.name());
+                        if re.is_match(file.name()) {
+                            info!("Found csv file")
+                        }
+                    }
+
                     ()
                 })
         })
