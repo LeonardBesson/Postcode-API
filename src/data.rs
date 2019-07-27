@@ -1,29 +1,33 @@
-use actix_web::client::Client;
-use diesel::prelude::*;
-use futures::{Future, failed};
-use log::{error, info};
-
-use crate::*;
-use crate::db::establish_connection;
-use crate::models::{State, NewAddress, Address};
-use crate::schema::states::dsl::*;
-use crate::data::RefreshError::{OldData, NoData};
-use postcode::AddressRecord;
+use std::collections::HashMap;
 use std::fmt::Formatter;
-use futures::future::{err, ok, Either};
-use actix_web::web::Bytes;
+use std::fs::File;
 use std::io::Read;
-use zip::ZipArchive;
+
+use actix_web::client::Client;
+use actix_web::web::Bytes;
+use chrono::{NaiveDateTime, Utc};
+use diesel::pg::upsert::excluded;
+use diesel::prelude::*;
+use futures::{failed, Future};
+use futures::future::{Either, err, ok};
+use indicatif::ProgressBar;
+use log::{error, info};
 use regex::Regex;
 use uuid::Uuid;
-use indicatif::ProgressBar;
-use diesel::pg::upsert::excluded;
-use std::collections::HashMap;
+use zip::ZipArchive;
+
+use postcode::AddressRecord;
+
+use crate::*;
+use crate::data::RefreshError::{NoData, OldData};
+use crate::db::establish_connection;
+use crate::models::{Address, NewAddress, NewState, State};
+use crate::schema::states::dsl::*;
 
 const STATE_BODY_LIMIT_BYTES: usize = 2_097_152; // 2MB
 const ZIP_BODY_LIMIT_BYTES: usize = 1_074_000_000; // 1GB
 
-const BATCH_SIZE: usize = 250;
+const BATCH_SIZE: usize = 2500;
 
 #[derive(Debug)]
 pub enum RefreshError {
@@ -178,7 +182,8 @@ pub fn update_state(
                             };
                             process_batch(&conn, &mut batch, &progress_bar);
                             progress_bar.finish();
-                            // TODO: insert new state
+
+                            create_new_state(&conn, &state_hash);
                             info!("Done");
                             break;
                         }
@@ -194,12 +199,12 @@ fn process_batch(
     batch: &mut Vec<AddressRecord>,
     progress_bar: &ProgressBar
 ) {
-    create_or_update_address(&conn, &batch);
+    create_or_update_addresses(&conn, &batch);
     progress_bar.inc(batch.len() as u64);
     batch.clear();
 }
 
-fn create_or_update_address<'a>(
+fn create_or_update_addresses<'a>(
     conn: &PgConnection,
     records: &Vec<AddressRecord>
 ) {
@@ -209,7 +214,9 @@ fn create_or_update_address<'a>(
     // Filter duplicates because the same address sometimes have different coordinates, for example:
     // 4.6863255,52.3094285,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,7c3c022a3d3d5f99
     // 4.6863538,52.3094487,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,857b39c71594b270
-    let mut address_map: HashMap<(String, String), NewAddress> = HashMap::new();
+    let mut address_map: HashMap<(String, String), NewAddress> =
+        HashMap::with_capacity(records.len());
+
     for record in records {
         let key = (record.postcode.clone(), record.number.clone());
         address_map.insert(key, NewAddress {
@@ -223,7 +230,9 @@ fn create_or_update_address<'a>(
             postcode: record.postcode.as_str()
         });
     }
-    let new_addresses = address_map.values().collect::<Vec<&NewAddress>>();
+    let new_addresses = address_map
+        .values()
+        .collect::<Vec<&NewAddress>>();
 
     diesel::insert_into(addresses::table)
         .values(new_addresses)
@@ -238,6 +247,23 @@ fn create_or_update_address<'a>(
         ))
         .execute(conn)
         .expect("Error saving new post");
+}
+
+fn create_new_state(conn: &PgConnection, state_hash: &str) {
+    use crate::schema::states;
+
+    let new_state = NewState {
+        id: Uuid::new_v4(),
+        hash: state_hash,
+        processed_at: Utc::now().naive_utc()
+    };
+
+    diesel::insert_into(states::table)
+        .values(new_state)
+        .execute(conn)
+        .map_err(|err|
+            error!("Could not create new state: {}", err)
+        );
 }
 
 // TODO: try to compose get_state_info and update_state

@@ -1,11 +1,21 @@
-use uuid::Uuid;
 use chrono::NaiveDateTime;
+use uuid::Uuid;
+
 use crate::schema::addresses;
+use crate::schema::states;
 
 #[derive(Queryable, Debug)]
 pub struct State {
     pub id: Uuid,
     pub hash: String,
+    pub processed_at: NaiveDateTime
+}
+
+#[derive(Insertable, Debug)]
+#[table_name="states"]
+pub struct NewState<'a> {
+    pub id: Uuid,
+    pub hash: &'a str,
     pub processed_at: NaiveDateTime
 }
 

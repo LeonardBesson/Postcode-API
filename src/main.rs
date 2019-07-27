@@ -45,21 +45,31 @@ fn main() -> io::Result<()> {
     let status = system.block_on(lazy(|| { get_state_info() }));
     match status {
         Ok(state_info) => {
-            if state_info.info.is_none() {
-                if state_info.current_state.is_none() {
-                    panic!("Couldn't fetch data and no fallback");
-                } else {
-                    info!("Falling back");
-                };
-            } else {
-                // TODO: check current state hash
-                info!("Updating state...");
-                let (count, url, hash) = state_info.info.unwrap();
-                match system.block_on(lazy(|| { update_state(count, url, hash) })) {
-                    Ok(_) => { info!("Successfuly updated state"); },
-                    Err(err) => { error!("Error while updating state: {}", err); },
-                };
-            };
+            match state_info.info {
+                Some((count, url, state_hash)) => {
+                    let up_to_date = state_info
+                        .current_state
+                        .filter(|s| s.hash == state_hash)
+                        .is_some();
+
+                    if up_to_date {
+                        info!("Data already up to date (state: {})", state_hash);
+                    } else {
+                        info!("Updating data...");
+                        match system.block_on(lazy(|| { update_state(count, url, state_hash) })) {
+                            Ok(_) => { info!("Successfuly updated data"); },
+                            Err(err) => { error!("Error while updating state: {}", err); },
+                        };
+                    }
+                },
+                None => {
+                    if state_info.current_state.is_none() {
+                        panic!("Couldn't fetch data and no fallback");
+                    } else {
+                        info!("Falling back");
+                    };
+                }
+            }
         },
         Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
         Err(RefreshError::OldData) => { error!("Falling back"); }
