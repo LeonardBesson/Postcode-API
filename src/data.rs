@@ -5,18 +5,25 @@ use log::{error, info};
 
 use crate::*;
 use crate::db::establish_connection;
-use crate::models::State;
+use crate::models::{State, NewAddress, Address};
 use crate::schema::states::dsl::*;
 use crate::data::RefreshError::{OldData, NoData};
+use postcode::AddressRecord;
 use std::fmt::Formatter;
 use futures::future::{err, ok, Either};
 use actix_web::web::Bytes;
 use std::io::Read;
 use zip::ZipArchive;
 use regex::Regex;
+use uuid::Uuid;
+use indicatif::ProgressBar;
+use diesel::pg::upsert::excluded;
+use std::collections::HashMap;
 
 const STATE_BODY_LIMIT_BYTES: usize = 2_097_152; // 2MB
 const ZIP_BODY_LIMIT_BYTES: usize = 1_074_000_000; // 1GB
+
+const BATCH_SIZE: usize = 250;
 
 #[derive(Debug)]
 pub enum RefreshError {
@@ -75,7 +82,7 @@ impl From<diesel::result::Error> for RefreshError {
 
 pub struct StateInfo {
     // hash + url
-    pub info: Option<(String, String)>,
+    pub info: Option<(usize, String, String)>,
     pub current_state: Option<State>
 }
 
@@ -90,7 +97,7 @@ pub fn get_state_info() -> impl Future<Item = StateInfo, Error = RefreshError> {
                 .limit(STATE_BODY_LIMIT_BYTES)
                 .from_err()
                 .map(|body| {
-                    let info = get_url_and_hash(body);
+                    let info = get_info(body);
                     let connection = establish_connection();
                     let current_state = current_state(&connection);
                     StateInfo { info, current_state }
@@ -98,7 +105,7 @@ pub fn get_state_info() -> impl Future<Item = StateInfo, Error = RefreshError> {
         })
 }
 
-fn get_url_and_hash(body: Bytes) -> Option<(String, String)> {
+fn get_info(body: Bytes) -> Option<(usize, String, String)> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(&body[..]);
@@ -115,7 +122,7 @@ fn get_url_and_hash(body: Bytes) -> Option<(String, String)> {
         })
         .map(|record| {
             let r = record.unwrap();
-            (r[8].to_owned(), r[10].to_owned())
+            (r[4].parse::<usize>().unwrap(), r[8].to_owned(), r[10].to_owned())
         })
 }
 
@@ -129,6 +136,7 @@ fn current_state(connection: &PgConnection) -> Option<State> {
 }
 
 pub fn update_state(
+    address_count: usize,
     url: String,
     state_hash: String,
 ) -> impl Future<Item = (), Error = RefreshError> {
@@ -138,11 +146,11 @@ pub fn update_state(
         .get(url)
         .send()
         .map_err(RefreshError::from)
-        .and_then(|mut resp| {
+        .and_then(move |mut resp| {
             resp.body()
                 .limit(ZIP_BODY_LIMIT_BYTES)
                 .from_err()
-                .map(|body| {
+                .map(move |body| {
                     info!("Downloaded zip, size: {} MB", body.len() / 1_000_000);
                     info!("Searching for csv file");
 
@@ -151,10 +159,28 @@ pub fn update_state(
                     let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
                     for i in 0..zip.len()
                     {
-                        let mut file = zip.by_index(i).unwrap();
+                        let file = zip.by_index(i).unwrap();
                         info!("Filename: {}", file.name());
                         if re.is_match(file.name()) {
-                            info!("Found csv file")
+                            info!("Found csv file");
+                            info!("Updating database records...");
+                            let conn = establish_connection();
+                            let mut reader = csv::Reader::from_reader(file);
+
+                            let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
+                            let progress_bar = ProgressBar::new(address_count as u64);
+                            for record in reader.deserialize() {
+                                let address_record: AddressRecord = record.expect("Could not deserialize post code record");
+                                batch.push(address_record);
+                                if batch.len() == BATCH_SIZE {
+                                    process_batch(&conn, &mut batch, &progress_bar);
+                                }
+                            };
+                            process_batch(&conn, &mut batch, &progress_bar);
+                            progress_bar.finish();
+                            // TODO: insert new state
+                            info!("Done");
+                            break;
                         }
                     }
 
@@ -163,6 +189,56 @@ pub fn update_state(
         })
 }
 
+fn process_batch(
+    conn: &PgConnection,
+    batch: &mut Vec<AddressRecord>,
+    progress_bar: &ProgressBar
+) {
+    create_or_update_address(&conn, &batch);
+    progress_bar.inc(batch.len() as u64);
+    batch.clear();
+}
+
+fn create_or_update_address<'a>(
+    conn: &PgConnection,
+    records: &Vec<AddressRecord>
+) {
+    use schema::addresses;
+    use schema::addresses::{lat, lon, region, city, street, postcode, number};
+
+    // Filter duplicates because the same address sometimes have different coordinates, for example:
+    // 4.6863255,52.3094285,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,7c3c022a3d3d5f99
+    // 4.6863538,52.3094487,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,857b39c71594b270
+    let mut address_map: HashMap<(String, String), NewAddress> = HashMap::new();
+    for record in records {
+        let key = (record.postcode.clone(), record.number.clone());
+        address_map.insert(key, NewAddress {
+            id: Uuid::new_v4(),
+            lon: record.lon as f64,
+            lat: record.lat as f64,
+            number: record.number.as_str(),
+            street: record.street.as_str(),
+            city: record.city.as_str(),
+            region: record.region.as_str(),
+            postcode: record.postcode.as_str()
+        });
+    }
+    let new_addresses = address_map.values().collect::<Vec<&NewAddress>>();
+
+    diesel::insert_into(addresses::table)
+        .values(new_addresses)
+        .on_conflict((postcode, number))
+        .do_update()
+        .set((
+            lat.eq(excluded(lat)),
+            lon.eq(excluded(lon)),
+            street.eq(excluded(street)),
+            city.eq(excluded(city)),
+            region.eq(excluded(region))
+        ))
+        .execute(conn)
+        .expect("Error saving new post");
+}
 
 // TODO: try to compose get_state_info and update_state
 // Chaining futures with different return type is a pain
