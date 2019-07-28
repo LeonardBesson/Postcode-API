@@ -275,19 +275,16 @@ fn create_new_state(conn: &PgConnection, state_hash: &str) {
 pub fn get_addresses(
     pool: web::Data<Pool>,
     pcode: &str,
-    nb: Option<&str>
+    house_number: Option<&str>
 ) -> Result<Vec<Address>, diesel::result::Error> {
     use crate::schema::addresses::dsl::*;
 
-    let mut filters: Box<dyn BoxableExpression<addresses, _, SqlType = Bool>> =
-        Box::new(postcode.eq(pcode));
-
-    if let Some(nb) = nb {
-        filters = Box::new(filters.and(number.ilike(format!("{}%", nb))));
+    let mut query = addresses.filter(postcode.eq(pcode)).into_boxed();
+    if let Some(nb) = house_number {
+        query = query.filter(number.ilike(format!("{}%", nb)));
     }
 
-    addresses
-        .filter(filters)
+    query
         .limit(ADDRESSES_RESULT_LIMIT)
         .load(&pool.get().unwrap())
 }
