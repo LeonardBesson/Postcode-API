@@ -4,10 +4,12 @@ use std::fs::File;
 use std::io::Read;
 
 use actix_web::client::Client;
+use actix_web::web;
 use actix_web::web::Bytes;
 use chrono::{NaiveDateTime, Utc};
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
+use diesel::sql_types::Bool;
 use futures::{failed, Future};
 use futures::future::{Either, err, ok};
 use indicatif::ProgressBar;
@@ -16,18 +18,17 @@ use regex::Regex;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use postcode::AddressRecord;
-
-use crate::*;
 use crate::data::RefreshError::{NoData, OldData};
 use crate::db::Pool;
 use crate::models::{Address, NewAddress, NewState, State};
-use crate::schema::states::dsl::*;
+use crate::postcode::AddressRecord;
 
 const STATE_BODY_LIMIT_BYTES: usize = 2_097_152; // 2MB
 const ZIP_BODY_LIMIT_BYTES: usize = 1_074_000_000; // 1GB
 
 const BATCH_SIZE: usize = 2500;
+
+const ADDRESSES_RESULT_LIMIT: i64 = 200;
 
 #[derive(Debug)]
 pub enum RefreshError {
@@ -131,6 +132,8 @@ fn get_info(body: Bytes) -> Option<(usize, String, String)> {
 }
 
 fn current_state(connection: &PgConnection) -> Option<State> {
+    use crate::schema::states::dsl::*;
+
     states
         .order(processed_at.desc())
         .limit(1)
@@ -209,8 +212,8 @@ fn create_or_update_addresses<'a>(
     conn: &PgConnection,
     records: &Vec<AddressRecord>
 ) {
-    use schema::addresses;
-    use schema::addresses::{lat, lon, region, city, street, postcode, number};
+    use crate::schema::addresses;
+    use crate::schema::addresses::dsl::*;
 
     // Filter duplicates because the same address sometimes have different coordinates, for example:
     // 4.6863255,52.3094285,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,7c3c022a3d3d5f99
@@ -247,11 +250,13 @@ fn create_or_update_addresses<'a>(
             region.eq(excluded(region))
         ))
         .execute(conn)
-        .expect("Error saving new post");
+        .map_err(|err|
+            error!("Error saving new address: {}", err)
+        );
 }
 
 fn create_new_state(conn: &PgConnection, state_hash: &str) {
-    use crate::schema::states;
+    use crate::schema::states::dsl::*;
 
     let new_state = NewState {
         id: Uuid::new_v4(),
@@ -259,12 +264,32 @@ fn create_new_state(conn: &PgConnection, state_hash: &str) {
         processed_at: Utc::now().naive_utc()
     };
 
-    diesel::insert_into(states::table)
+    diesel::insert_into(states)
         .values(new_state)
         .execute(conn)
         .map_err(|err|
             error!("Could not create new state: {}", err)
         );
+}
+
+pub fn get_addresses(
+    pool: web::Data<Pool>,
+    pcode: &str,
+    nb: Option<&str>
+) -> Result<Vec<Address>, diesel::result::Error> {
+    use crate::schema::addresses::dsl::*;
+
+    let mut filters: Box<dyn BoxableExpression<addresses, _, SqlType = Bool>> =
+        Box::new(postcode.eq(pcode));
+
+    if let Some(nb) = nb {
+        filters = Box::new(filters.and(number.ilike(format!("{}%", nb))));
+    }
+
+    addresses
+        .filter(filters)
+        .limit(ADDRESSES_RESULT_LIMIT)
+        .load(&pool.get().unwrap())
 }
 
 // TODO: try to compose get_state_info and update_state

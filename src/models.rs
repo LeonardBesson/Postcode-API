@@ -1,4 +1,5 @@
 use chrono::NaiveDateTime;
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::schema::addresses;
@@ -19,7 +20,7 @@ pub struct NewState<'a> {
     pub processed_at: NaiveDateTime
 }
 
-#[derive(Queryable, Debug)]
+#[derive(Serialize, Queryable, Debug)]
 pub struct Address {
     pub id: Uuid,
     pub lon: f64,
