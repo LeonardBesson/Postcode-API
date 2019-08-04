@@ -18,9 +18,9 @@ use futures::{Future, lazy};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 
-use data::{get_addresses, get_state_info, update_state};
+use data::refresh_state;
 
-use crate::data::{RefreshError, StateInfo};
+use crate::data::{get_addresses, RefreshError, StateInfo};
 use crate::db::{init_connection_pool, Pool};
 
 mod schema;
@@ -31,7 +31,7 @@ mod postcode;
 
 embed_migrations!("./migrations");
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct AddressRequest {
     postcode: String,
     number: Option<String>
@@ -62,39 +62,7 @@ fn main() -> io::Result<()> {
     embedded_migrations::run(&pool.get().unwrap());
 
     let mut system = System::new("postcode-service");
-
-    let status = system.block_on(lazy(|| { get_state_info(&pool) }));
-    match status {
-        Ok(state_info) => {
-            match state_info.info {
-                Some((count, url, state_hash)) => {
-                    let up_to_date = state_info
-                        .current_state
-                        .filter(|s| s.hash == state_hash)
-                        .is_some();
-
-                    if up_to_date {
-                        info!("Data already up to date (state: {})", state_hash);
-                    } else {
-                        info!("Updating data...");
-                        match system.block_on(lazy(|| { update_state(&pool, count, url, state_hash) })) {
-                            Ok(_) => { info!("Successfuly updated data"); },
-                            Err(err) => { error!("Error while updating state: {}", err); },
-                        };
-                    }
-                },
-                None => {
-                    if state_info.current_state.is_none() {
-                        panic!("Couldn't fetch data and no fallback");
-                    } else {
-                        info!("Falling back");
-                    };
-                }
-            }
-        },
-        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
-        Err(RefreshError::OldData) => { error!("Falling back"); }
-    };
+    refresh_state(&mut system, &pool);
 
     HttpServer::new(move || {
         App::new()

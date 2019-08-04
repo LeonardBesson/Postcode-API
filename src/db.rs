@@ -21,7 +21,7 @@ pub fn init_connection_pool() -> Pool {
             .parse::<u32>()
             .expect("DATABASE_POOL_SIZE must be an integer")
         )
-        .unwrap_or(15);
+        .unwrap_or(DEFAULT_DB_POOL_SIZE as u32);
 
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     r2d2::Pool::builder()

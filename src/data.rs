@@ -3,6 +3,7 @@ use std::fmt::Formatter;
 use std::fs::File;
 use std::io::Read;
 
+use actix::{System, SystemRunner};
 use actix_web::client::Client;
 use actix_web::web;
 use actix_web::web::Bytes;
@@ -11,7 +12,7 @@ use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
 use diesel::sql_types::Bool;
 use futures::{failed, Future};
-use futures::future::{Either, err, ok};
+use futures::future::{Either};
 use indicatif::ProgressBar;
 use log::{error, info};
 use regex::Regex;
@@ -87,12 +88,50 @@ impl From<diesel::result::Error> for RefreshError {
 
 pub struct StateInfo {
     // hash + url
-    pub info: Option<(usize, String, String)>,
+    pub info: Option<(usize, String, String)>, // TODO: use struct
     pub current_state: Option<State>
 }
 
+pub fn refresh_state(
+    system: &mut SystemRunner,
+    pool: &Pool
+) {
+    let status = system.block_on(futures::lazy(|| { get_state_info(pool) }));
+    match status {
+        Ok(state_info) => {
+            match state_info.info {
+                Some((count, url, state_hash)) => {
+                    let up_to_date = state_info
+                        .current_state
+                        .filter(|s| s.hash == state_hash)
+                        .is_some();
+
+                    if up_to_date {
+                        info!("Data already up to date (state: {})", state_hash);
+                    } else {
+                        info!("Updating data...");
+                        match system.block_on(futures::lazy(|| { update_state(pool, count, url, state_hash) })) {
+                            Ok(_) => { info!("Successfuly updated data"); },
+                            Err(err) => { error!("Error while updating state: {}", err); },
+                        };
+                    }
+                },
+                None => {
+                    if state_info.current_state.is_none() {
+                        panic!("Couldn't fetch data and no fallback");
+                    } else {
+                        info!("Falling back");
+                    };
+                }
+            }
+        },
+        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
+        Err(RefreshError::OldData) => { error!("Falling back"); }
+    };
+}
+
 /// Returns true if the state was updated
-pub fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateInfo, Error = RefreshError> + 'a {
+fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateInfo, Error = RefreshError> + 'a {
     Client::default()
         .get("http://results.openaddresses.io/state.txt")
         .send()
@@ -127,6 +166,8 @@ fn get_info(body: Bytes) -> Option<(usize, String, String)> {
         })
         .map(|record| {
             let r = record.unwrap();
+            // TODO: we might want to use the version instead of hash because it seems like the
+            // same version can be re-uploaded multiple times on http://results.openaddresses.io/
             (r[4].parse::<usize>().unwrap(), r[8].to_owned(), r[10].to_owned())
         })
 }
@@ -142,7 +183,7 @@ fn current_state(connection: &PgConnection) -> Option<State> {
         .unwrap_or(None)
 }
 
-pub fn update_state<'a>(
+fn update_state<'a>(
     pool: &'a Pool,
     address_count: usize,
     url: String,
@@ -212,7 +253,6 @@ fn create_or_update_addresses<'a>(
     conn: &PgConnection,
     records: &Vec<AddressRecord>
 ) {
-    use crate::schema::addresses;
     use crate::schema::addresses::dsl::*;
 
     // Filter duplicates because the same address sometimes have different coordinates, for example:
@@ -238,7 +278,7 @@ fn create_or_update_addresses<'a>(
         .values()
         .collect::<Vec<&NewAddress>>();
 
-    diesel::insert_into(addresses::table)
+    diesel::insert_into(addresses)
         .values(new_addresses)
         .on_conflict((postcode, number))
         .do_update()
@@ -294,86 +334,3 @@ pub fn get_addresses(
 // Apparently Box<dyn Future<blabla>> can fix the issue
 // But I couldn't get it to compile.
 // Check "Returning from multiple branches" from https://tokio.rs/docs/futures/combinators/#use-impl-future
-
-//pub fn refresh_state() -> impl Future<Item = bool, Error = RefreshError> {
-//    Client::default()
-//        .get("http://results.openaddresses.io/state.txt")
-//        .send()
-//        .map_err(|e| Err(RefreshError::from(e)))
-//        .and_then(|mut resp| {
-//            resp.body()
-//                .limit(1_048_576)
-//                .from_err()
-//                .map_err(|e| Err(e))
-//                .map(|body| {
-//                    let state_info = state_info(body);
-//                    let connection = establish_connection();
-//                    let current_state = current_state(&connection);
-//
-//                    match state_info {
-//                        Some((state_hash, url)) => {
-//                            info!("(hash, url): ({}, {})", state_hash, url);
-//                            if let Some(state) = current_state {
-//                                if state.hash == state_hash {
-//                                    info!("State is up to date");
-//                                    Ok(false)
-//                                } else {
-//                                    update_state(state_hash, url);
-//                                    Ok(true)
-//                                }
-//                            } else {
-//                                Ok(false)
-//
-//                            }
-//                        },
-//                        None => {
-//                            match current_state {
-//                                Some(_) => { Err(OldData) },
-//                                None => { Err(NoData) },
-//                            }
-//                        },
-//                    }
-//                })
-//        })
-//}
-
-//pub fn refresh_state() -> Box<dyn Future<Item = bool, Error = RefreshError>> {
-//    Box::new(Client::default()
-//        .get("http://results.openaddresses.io/state.txt")
-//        .send()
-//        .map_err(|e| err(RefreshError::from(e)))
-//        .and_then(|mut resp| {
-//            Box::new(resp.body()
-//                .limit(1_048_576)
-//                .from_err()
-//                .map_err(|e| err(e))
-//                .map(|body| {
-//                    let state_info = state_info(body);
-//                    let connection = establish_connection();
-//                    let current_state = current_state(&connection);
-//
-//                    match state_info {
-//                        Some((state_hash, url)) => {
-//                            info!("(hash, url): ({}, {})", state_hash, url);
-//                            if let Some(state) = current_state {
-//                                if state.hash == state_hash {
-//                                    info!("State is up to date");
-//                                    ok(false)
-//                                } else {
-//                                    update_state(state_hash, url);
-//                                    ok(true)
-//                                }
-//                            } else {
-//                                ok(false)
-//                            }
-//                        },
-//                        None => {
-//                            match current_state {
-//                                Some(_) => { err(OldData) },
-//                                None => { err(NoData) },
-//                            }
-//                        },
-//                    }
-//                }))
-//        }))
-//}
