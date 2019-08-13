@@ -29,3 +29,16 @@ pub fn init_connection_pool() -> Pool {
         .build(manager)
         .expect("Failed to create db pool")
 }
+
+pub fn init_test_connection_pool() -> Pool {
+    dotenv().ok();
+
+    let database_url = env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be set");
+
+    let manager = ConnectionManager::<PgConnection>::new(database_url);
+    r2d2::Pool::builder()
+        .max_size(3)
+        .build(manager)
+        .expect("Failed to create test db pool")
+}

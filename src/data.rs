@@ -10,9 +10,7 @@ use actix_web::web::Bytes;
 use chrono::{NaiveDateTime, Utc};
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
-use diesel::sql_types::Bool;
-use futures::{failed, Future};
-use futures::future::{Either};
+use futures::Future;
 use indicatif::ProgressBar;
 use log::{error, info};
 use regex::Regex;
@@ -102,7 +100,7 @@ pub fn refresh_state(
     system: &mut SystemRunner,
     pool: &Pool
 ) {
-    let status = system.block_on(futures::lazy(|| { get_state_info(pool) }));
+    let status = system.block_on(futures::lazy(|| { get_state_refresh(pool) }));
     match status {
         Ok(state_refresh) => {
             match state_refresh.state_info {
@@ -137,7 +135,7 @@ pub fn refresh_state(
 }
 
 /// Returns true if the state was updated
-fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateRefresh, Error = RefreshError> + 'a {
+fn get_state_refresh<'a>(pool: &'a Pool) -> impl Future<Item = StateRefresh, Error = RefreshError> + 'a {
     Client::default()
         .get("http://results.openaddresses.io/state.txt")
         .send()
@@ -256,7 +254,7 @@ fn process_batch(
     batch.clear();
 }
 
-fn create_or_update_addresses<'a>(
+pub fn create_or_update_addresses<'a>(
     conn: &PgConnection,
     records: &Vec<AddressRecord>
 ) {
@@ -333,6 +331,7 @@ pub fn get_addresses(
     }
 
     query
+        .order(number.asc())
         .limit(ADDRESSES_RESULT_LIMIT)
         .load(&pool.get().unwrap())
 }

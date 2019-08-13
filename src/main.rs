@@ -3,6 +3,8 @@ extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
 extern crate dotenv;
+#[macro_use]
+extern crate lazy_static;
 
 use std::io;
 
@@ -28,6 +30,7 @@ mod data;
 mod db;
 mod models;
 mod postcode;
+mod tests;
 
 embed_migrations!("./migrations");
 
