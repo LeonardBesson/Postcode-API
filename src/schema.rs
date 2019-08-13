@@ -15,6 +15,7 @@ table! {
     states (id) {
         id -> Uuid,
         hash -> Text,
+        version -> Text,
         processed_at -> Timestamp,
     }
 }

@@ -87,8 +87,14 @@ impl From<diesel::result::Error> for RefreshError {
 }
 
 pub struct StateInfo {
-    // hash + url
-    pub info: Option<(usize, String, String)>, // TODO: use struct
+    pub url: String,
+    pub hash: String,
+    pub version: String,
+    pub address_count: usize
+}
+
+pub struct StateRefresh {
+    pub state_info: Option<StateInfo>,
     pub current_state: Option<State>
 }
 
@@ -98,26 +104,26 @@ pub fn refresh_state(
 ) {
     let status = system.block_on(futures::lazy(|| { get_state_info(pool) }));
     match status {
-        Ok(state_info) => {
-            match state_info.info {
-                Some((count, url, state_hash)) => {
-                    let up_to_date = state_info
+        Ok(state_refresh) => {
+            match state_refresh.state_info {
+                Some(state_info) => {
+                    let up_to_date = state_refresh
                         .current_state
-                        .filter(|s| s.hash == state_hash)
+                        .filter(|s| s.version == state_info.version)
                         .is_some();
 
                     if up_to_date {
-                        info!("Data already up to date (state: {})", state_hash);
+                        info!("Data already up to date (state: {})", state_info.hash);
                     } else {
                         info!("Updating data...");
-                        match system.block_on(futures::lazy(|| { update_state(pool, count, url, state_hash) })) {
+                        match system.block_on(futures::lazy(|| { update_state(pool, state_info) })) {
                             Ok(_) => { info!("Successfuly updated data"); },
                             Err(err) => { error!("Error while updating state: {}", err); },
                         };
                     }
                 },
                 None => {
-                    if state_info.current_state.is_none() {
+                    if state_refresh.current_state.is_none() {
                         panic!("Couldn't fetch data and no fallback");
                     } else {
                         info!("Falling back");
@@ -131,7 +137,7 @@ pub fn refresh_state(
 }
 
 /// Returns true if the state was updated
-fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateInfo, Error = RefreshError> + 'a {
+fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateRefresh, Error = RefreshError> + 'a {
     Client::default()
         .get("http://results.openaddresses.io/state.txt")
         .send()
@@ -141,15 +147,15 @@ fn get_state_info<'a>(pool: &'a Pool) -> impl Future<Item = StateInfo, Error = R
                 .limit(STATE_BODY_LIMIT_BYTES)
                 .from_err()
                 .map(move |body| {
-                    let info = get_info(body);
+                    let state_info = get_info(body);
                     let connection = pool.get().unwrap();
                     let current_state = current_state(&connection);
-                    StateInfo { info, current_state }
+                    StateRefresh { state_info, current_state }
                 })
         })
 }
 
-fn get_info(body: Bytes) -> Option<(usize, String, String)> {
+fn get_info(body: Bytes) -> Option<StateInfo> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(&body[..]);
@@ -166,9 +172,12 @@ fn get_info(body: Bytes) -> Option<(usize, String, String)> {
         })
         .map(|record| {
             let r = record.unwrap();
-            // TODO: we might want to use the version instead of hash because it seems like the
-            // same version can be re-uploaded multiple times on http://results.openaddresses.io/
-            (r[4].parse::<usize>().unwrap(), r[8].to_owned(), r[10].to_owned())
+            StateInfo {
+                address_count: r[4].parse::<usize>().unwrap(),
+                url: r[8].to_owned(),
+                hash: r[10].to_owned(),
+                version: r[15].to_owned()
+            }
         })
 }
 
@@ -185,14 +194,12 @@ fn current_state(connection: &PgConnection) -> Option<State> {
 
 fn update_state<'a>(
     pool: &'a Pool,
-    address_count: usize,
-    url: String,
-    state_hash: String,
+    state_info: StateInfo
 ) -> impl Future<Item = (), Error = RefreshError> + 'a {
-    info!("Downloading state from {}", url);
+    info!("Downloading state version {} from {}", state_info.version, state_info.url);
 
     Client::default()
-        .get(url)
+        .get(&state_info.url)
         .send()
         .map_err(RefreshError::from)
         .and_then(move |mut resp| {
@@ -217,7 +224,7 @@ fn update_state<'a>(
                             let mut reader = csv::Reader::from_reader(file);
 
                             let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
-                            let progress_bar = ProgressBar::new(address_count as u64);
+                            let progress_bar = ProgressBar::new(state_info.address_count as u64);
                             for record in reader.deserialize() {
                                 let address_record: AddressRecord = record.expect("Could not deserialize post code record");
                                 batch.push(address_record);
@@ -228,7 +235,7 @@ fn update_state<'a>(
                             process_batch(&conn, &mut batch, &progress_bar);
                             progress_bar.finish();
 
-                            create_new_state(&conn, &state_hash);
+                            create_new_state(&conn, &state_info);
                             info!("Done");
                             break;
                         }
@@ -295,12 +302,13 @@ fn create_or_update_addresses<'a>(
         );
 }
 
-fn create_new_state(conn: &PgConnection, state_hash: &str) {
+fn create_new_state(conn: &PgConnection, state_info: &StateInfo) {
     use crate::schema::states::dsl::*;
 
     let new_state = NewState {
         id: Uuid::new_v4(),
-        hash: state_hash,
+        hash: &state_info.hash,
+        version: &state_info.version,
         processed_at: Utc::now().naive_utc()
     };
 

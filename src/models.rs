@@ -9,6 +9,7 @@ use crate::schema::states;
 pub struct State {
     pub id: Uuid,
     pub hash: String,
+    pub version: String,
     pub processed_at: NaiveDateTime
 }
 
@@ -17,6 +18,7 @@ pub struct State {
 pub struct NewState<'a> {
     pub id: Uuid,
     pub hash: &'a str,
+    pub version: &'a str,
     pub processed_at: NaiveDateTime
 }
 
