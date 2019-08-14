@@ -160,7 +160,7 @@ mod tests {
     fn create_test_set() {
         create_or_update_addresses(
             &POOL.get().unwrap(),
-            &vec![
+            &[
                 AddressRecord {
                     lon: 1.0,
                     lat: 2.0,

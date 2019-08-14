@@ -111,7 +111,7 @@ pub fn refresh_state(
                         .is_some();
 
                     if up_to_date {
-                        info!("Data already up to date (state: {})", state_info.hash);
+                        info!("Data already up to date (state: {})", state_info.version);
                     } else {
                         info!("Updating data...");
                         match system.block_on(futures::lazy(|| { update_state(pool, state_info) })) {
@@ -256,7 +256,7 @@ fn process_batch(
 
 pub fn create_or_update_addresses<'a>(
     conn: &PgConnection,
-    records: &Vec<AddressRecord>
+    records: &[AddressRecord]
 ) {
     use crate::schema::addresses::dsl::*;
 
