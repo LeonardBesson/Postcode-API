@@ -9,7 +9,7 @@ extern crate lazy_static;
 use std::io;
 
 use actix::fut::ok;
-use actix::System;
+use actix::{System, Arbiter, Actor, Running, AsyncContext, SystemRunner};
 use actix_web::{App, Error, HttpResponse, HttpServer, Responder, web};
 use actix_web::client::Client;
 use actix_web::middleware::Logger;
@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use data::refresh_state;
 
 use crate::data::{get_addresses, RefreshError, StateInfo};
-use crate::db::{init_connection_pool, Pool};
+use crate::db::{init_connection_pool, Pool, establish_connection};
+use std::time::Duration;
 
 mod schema;
 mod data;
@@ -57,6 +58,19 @@ fn addresses(
     })
 }
 
+struct RefreshStateActor {}
+
+impl Actor for RefreshStateActor {
+    type Context = actix::Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.run_interval(Duration::from_secs(3), move |act, ctx| {
+            let conn = establish_connection();
+            info!("Running!")
+        });
+    }
+}
+
 fn main() -> io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
@@ -67,6 +81,15 @@ fn main() -> io::Result<()> {
     let mut system = System::new("postcode-service");
     refresh_state(&mut system, &pool);
 
+    let arbiter = Arbiter::new();
+//    let act_pool = &pool.clone();
+    RefreshStateActor::start_in_arbiter(&arbiter, move |ctx| {
+        RefreshStateActor {
+//            system: &mut system,
+//            pool: &pool.clone()
+        }
+    });
+
     HttpServer::new(move || {
         App::new()
             .data(pool.clone())
@@ -76,5 +99,7 @@ fn main() -> io::Result<()> {
     .bind("127.0.0.1:3000")?
     .start();
 
-    system.run()
+    let result = system.run();
+    arbiter.stop();
+    result
 }

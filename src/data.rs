@@ -134,7 +134,6 @@ pub fn refresh_state(
     };
 }
 
-/// Returns true if the state was updated
 fn get_state_refresh<'a>(pool: &'a Pool) -> impl Future<Item = StateRefresh, Error = RefreshError> + 'a {
     Client::default()
         .get("http://results.openaddresses.io/state.txt")
@@ -341,3 +340,72 @@ pub fn get_addresses(
 // Apparently Box<dyn Future<blabla>> can fix the issue
 // But I couldn't get it to compile.
 // Check "Returning from multiple branches" from https://tokio.rs/docs/futures/combinators/#use-impl-future
+
+
+
+
+
+
+
+
+
+
+
+
+
+/// Reqwest
+pub fn refresh_state2(
+    pool: &Pool
+) {
+    let status = get_state_refresh2(pool);
+    match status {
+        Ok(state_refresh) => {
+            match state_refresh.state_info {
+                Some(state_info) => {
+                    let up_to_date = state_refresh
+                        .current_state
+                        .filter(|s| s.version == state_info.version)
+                        .is_some();
+
+                    if up_to_date {
+                        info!("Data already up to date (state: {})", state_info.version);
+                    } else {
+                        info!("Updating data...");
+                        match system.block_on(futures::lazy(|| { update_state(pool, state_info) })) {
+                            Ok(_) => { info!("Successfuly updated data"); },
+                            Err(err) => { error!("Error while updating state: {}", err); },
+                        };
+                    }
+                },
+                None => {
+                    if state_refresh.current_state.is_none() {
+                        panic!("Couldn't fetch data and no fallback");
+                    } else {
+                        info!("Falling back");
+                    };
+                }
+            }
+        },
+        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
+        Err(RefreshError::OldData) => { error!("Falling back"); }
+    };
+}
+
+fn get_state_refresh2(pool: & Pool) -> Result<StateRefresh, RefreshError> {
+    reqwest::get("http://results.openaddresses.io/state.txt")
+    Client::default()
+        .get("http://results.openaddresses.io/state.txt")
+        .send()
+        .from_err()
+        .and_then(move |mut resp| {
+            resp.body()
+                .limit(STATE_BODY_LIMIT_BYTES)
+                .from_err()
+                .map(move |body| {
+                    let state_info = get_info(body);
+                    let connection = pool.get().unwrap();
+                    let current_state = current_state(&connection);
+                    StateRefresh { state_info, current_state }
+                })
+        })
+}
