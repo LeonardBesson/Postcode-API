@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use data::refresh_state;
 
-use crate::data::{get_addresses, RefreshError, StateInfo};
+use crate::data::{get_addresses, RefreshError, StateInfo, get_state_refresh2};
 use crate::db::{init_connection_pool, Pool, establish_connection};
 use std::time::Duration;
 
@@ -79,7 +79,9 @@ fn main() -> io::Result<()> {
     embedded_migrations::run(&pool.get().unwrap());
 
     let mut system = System::new("postcode-service");
-    refresh_state(&mut system, &pool);
+    let rstate = get_state_refresh2(&pool);
+    info!("{:?}", rstate.unwrap());
+//    refresh_state(&mut system, &pool);
 
     let arbiter = Arbiter::new();
 //    let act_pool = &pool.clone();

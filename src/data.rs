@@ -21,6 +21,7 @@ use crate::data::RefreshError::{NoData, OldData};
 use crate::db::Pool;
 use crate::models::{Address, NewAddress, NewState, State};
 use crate::postcode::AddressRecord;
+use reqwest::Response;
 
 const STATE_BODY_LIMIT_BYTES: usize = 2_097_152; // 2MB
 const ZIP_BODY_LIMIT_BYTES: usize = 1_074_000_000; // 1GB
@@ -84,6 +85,7 @@ impl From<diesel::result::Error> for RefreshError {
     }
 }
 
+#[derive(Debug)]
 pub struct StateInfo {
     pub url: String,
     pub hash: String,
@@ -91,6 +93,7 @@ pub struct StateInfo {
     pub address_count: usize
 }
 
+#[derive(Debug)]
 pub struct StateRefresh {
     pub state_info: Option<StateInfo>,
     pub current_state: Option<State>
@@ -354,58 +357,132 @@ pub fn get_addresses(
 
 
 /// Reqwest
-pub fn refresh_state2(
-    pool: &Pool
-) {
-    let status = get_state_refresh2(pool);
-    match status {
-        Ok(state_refresh) => {
-            match state_refresh.state_info {
-                Some(state_info) => {
-                    let up_to_date = state_refresh
-                        .current_state
-                        .filter(|s| s.version == state_info.version)
-                        .is_some();
 
-                    if up_to_date {
-                        info!("Data already up to date (state: {})", state_info.version);
-                    } else {
-                        info!("Updating data...");
-                        match system.block_on(futures::lazy(|| { update_state(pool, state_info) })) {
-                            Ok(_) => { info!("Successfuly updated data"); },
-                            Err(err) => { error!("Error while updating state: {}", err); },
-                        };
-                    }
-                },
-                None => {
-                    if state_refresh.current_state.is_none() {
-                        panic!("Couldn't fetch data and no fallback");
-                    } else {
-                        info!("Falling back");
-                    };
-                }
-            }
-        },
-        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
-        Err(RefreshError::OldData) => { error!("Falling back"); }
-    };
+impl From<reqwest::Error> for RefreshError {
+    fn from(error: reqwest::Error) -> Self {
+        OldData
+    }
 }
 
-fn get_state_refresh2(pool: & Pool) -> Result<StateRefresh, RefreshError> {
-    reqwest::get("http://results.openaddresses.io/state.txt")
-    Client::default()
-        .get("http://results.openaddresses.io/state.txt")
-        .send()
-        .from_err()
-        .and_then(move |mut resp| {
-            resp.body()
-                .limit(STATE_BODY_LIMIT_BYTES)
-                .from_err()
-                .map(move |body| {
-                    let state_info = get_info(body);
-                    let connection = pool.get().unwrap();
-                    let current_state = current_state(&connection);
-                    StateRefresh { state_info, current_state }
-                })
+//pub fn refresh_state2(pool: &Pool) {
+//    let status = get_state_refresh2(pool);
+//    match status {
+//        Ok(state_refresh) => {
+//            match state_refresh.state_info {
+//                Some(state_info) => {
+//                    let up_to_date = state_refresh
+//                        .current_state
+//                        .filter(|s| s.version == state_info.version)
+//                        .is_some();
+//
+//                    if up_to_date {
+//                        info!("Data already up to date (state: {})", state_info.version);
+//                    } else {
+//                        info!("Updating data...");
+//                        match system.block_on(futures::lazy(|| { update_state(pool, state_info) })) {
+//                            Ok(_) => { info!("Successfuly updated data"); },
+//                            Err(err) => { error!("Error while updating state: {}", err); },
+//                        };
+//                    }
+//                },
+//                None => {
+//                    if state_refresh.current_state.is_none() {
+//                        panic!("Couldn't fetch data and no fallback");
+//                    } else {
+//                        info!("Falling back");
+//                    };
+//                }
+//            }
+//        },
+//        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
+//        Err(RefreshError::OldData) => { error!("Falling back"); }
+//    };
+//}
+
+fn get_info2(response: Response) -> Option<StateInfo> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_reader(response);
+
+    reader
+        .records()
+        .find(|record| {
+            record.is_ok() &&
+                record
+                    .as_ref()
+                    .unwrap()
+                    .as_slice()
+                    .starts_with("nl/countrywide.json")
+        })
+        .map(|record| {
+            let r = record.unwrap();
+            StateInfo {
+                address_count: r[4].parse::<usize>().unwrap(),
+                url: r[8].to_owned(),
+                hash: r[10].to_owned(),
+                version: r[15].to_owned()
+            }
         })
 }
+
+pub fn get_state_refresh2(pool: & Pool) -> Result<StateRefresh, RefreshError> {
+    let response = reqwest::get("http://results.openaddresses.io/state.txt")?;
+    let state_info = get_info2(response);
+    let connection = pool.get().unwrap();
+    let current_state = current_state(&connection);
+    Ok(StateRefresh { state_info, current_state })
+}
+
+//fn update_state2<'a>(
+//    pool: &'a Pool,
+//    state_info: StateInfo
+//) -> impl Future<Item = (), Error = RefreshError> + 'a {
+//    info!("Downloading state version {} from {}", state_info.version, state_info.url);
+//
+//    Client::default()
+//        .get(&state_info.url)
+//        .send()
+//        .map_err(RefreshError::from)
+//        .and_then(move |mut resp| {
+//            resp.body()
+//                .limit(ZIP_BODY_LIMIT_BYTES)
+//                .from_err()
+//                .map(move |body| {
+//                    info!("Downloaded zip, size: {} MB", body.len() / 1_000_000);
+//                    info!("Searching for csv file");
+//
+//                    let mut reader = std::io::Cursor::new(body);
+//                    let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
+//                    let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
+//                    for i in 0..zip.len()
+//                        {
+//                            let file = zip.by_index(i).unwrap();
+//                            info!("Filename: {}", file.name());
+//                            if re.is_match(file.name()) {
+//                                info!("Found csv file");
+//                                info!("Updating database records...");
+//                                let conn = pool.get().unwrap();
+//                                let mut reader = csv::Reader::from_reader(file);
+//
+//                                let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
+//                                let progress_bar = ProgressBar::new(state_info.address_count as u64);
+//                                for record in reader.deserialize() {
+//                                    let address_record: AddressRecord = record.expect("Could not deserialize post code record");
+//                                    batch.push(address_record);
+//                                    if batch.len() == BATCH_SIZE {
+//                                        process_batch(&conn, &mut batch, &progress_bar);
+//                                    }
+//                                };
+//                                process_batch(&conn, &mut batch, &progress_bar);
+//                                progress_bar.finish();
+//
+//                                create_new_state(&conn, &state_info);
+//                                info!("Done");
+//                                break;
+//                            }
+//                        }
+//
+//                    ()
+//                })
+//        })
+//}
