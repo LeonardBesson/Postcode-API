@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::fs::File;
-use std::io::{Read, BufReader};
 
-use actix::{System, SystemRunner};
-use actix_web::client::Client;
+
+
+
+
 use actix_web::web;
-use actix_web::web::Bytes;
-use chrono::{NaiveDateTime, Utc};
+
+use chrono::{Utc};
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
 use futures::Future;
@@ -21,8 +21,6 @@ use crate::data::RefreshError::{NoData, OldData};
 use crate::db::Pool;
 use crate::models::{Address, NewAddress, NewState, State};
 use crate::postcode::AddressRecord;
-use reqwest::Response;
-use actix::fut::err;
 
 const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
@@ -52,7 +50,7 @@ impl std::fmt::Display for RefreshError {
 
 // TODO
 impl From<diesel::result::Error> for RefreshError {
-    fn from(error: diesel::result::Error) -> Self {
+    fn from(_error: diesel::result::Error) -> Self {
 //        use diesel::result::Error;
 //
 //        match error {
@@ -72,7 +70,7 @@ impl From<diesel::result::Error> for RefreshError {
 }
 
 impl From<reqwest::Error> for RefreshError {
-    fn from(error: reqwest::Error) -> Self {
+    fn from(_error: reqwest::Error) -> Self {
         OldData
     }
 }
@@ -171,7 +169,7 @@ fn update_state(
     info!("Downloaded zip, size: {} MB", buf.len() / 1_000_000);
     info!("Searching for csv file");
 
-    let mut reader = std::io::Cursor::new(&buf);
+    let reader = std::io::Cursor::new(&buf);
     let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
     let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
     for i in 0..zip.len() {

@@ -3,26 +3,20 @@ extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
 extern crate dotenv;
-#[macro_use]
-extern crate lazy_static;
 
-use std::{io, thread};
+use std::io;
 
-use actix::fut::ok;
-use actix::{System, Arbiter, Actor, Running, AsyncContext, SystemRunner};
-use actix_web::{App, Error, HttpResponse, HttpServer, Responder, web};
-use actix_web::client::Client;
+use actix::System;
+use actix_web::{App, Error, HttpResponse, HttpServer, web};
 use actix_web::middleware::Logger;
-use diesel::update;
-use diesel_migrations::embed_migrations;
 use env_logger;
-use futures::{Future, lazy};
-use log::{error, info};
-use serde::{Deserialize, Serialize};
+use log::error;
+use futures::Future;
+use serde::Deserialize;
 
-use crate::data::{get_addresses, RefreshError, StateInfo, refresh_state};
-use crate::db::{init_connection_pool, Pool, establish_connection};
-use std::time::Duration;
+use crate::data::{get_addresses, refresh_state};
+use crate::db::{init_connection_pool, Pool};
+use crate::state_refresher::StateRefresher;
 
 mod schema;
 mod data;
@@ -30,8 +24,7 @@ mod db;
 mod models;
 mod postcode;
 mod tests;
-
-embed_migrations!("./migrations");
+mod state_refresher;
 
 #[derive(Deserialize)]
 pub struct AddressRequest {
@@ -52,40 +45,28 @@ fn addresses(
     })
     .then(|res| match res {
         Ok(addresses) => { Ok(HttpResponse::Ok().json(addresses)) },
-        Err(err) => { Ok(HttpResponse::InternalServerError().finish()) },
+        Err(err) => {
+            error!("Error while retrieving addresses: {}", err);
+            Ok(HttpResponse::InternalServerError().finish())
+        },
     })
 }
 
-struct StateRefresher {}
-
-impl StateRefresher {
-    const INTERVAL_SECS: u64 = 3600 * 4;
-
-    fn start() {
-        thread::Builder::new()
-            .name("state-refresher".into())
-            .spawn(|| {
-                info!("Starting state refresh every {} hours", Self::INTERVAL_SECS / 3600);
-                loop {
-                    thread::sleep(Duration::from_secs(Self::INTERVAL_SECS));
-                    let conn = establish_connection();
-                    refresh_state(&conn);
-                }
-            });
-    }
-}
+embed_migrations!("./migrations");
 
 fn main() -> io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
 
     let pool = init_connection_pool();
-    embedded_migrations::run(&pool.get().unwrap());
+    embedded_migrations::run(&pool.get().unwrap())
+        .expect("Error while running migrations");
 
     let system = System::new("postcode-service");
     refresh_state(&pool.get().unwrap());
 
-    StateRefresher::start();
+    StateRefresher::start()
+        .expect("Could not start background state refresh thread");
 
     HttpServer::new(move || {
         App::new()
