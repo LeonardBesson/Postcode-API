@@ -8,15 +8,13 @@ mod tests {
         http::{header, StatusCode}, HttpRequest, HttpResponse, test, web,
     };
     use diesel::RunQueryDsl;
-    use diesel_migrations::embed_migrations;
+    use lazy_static::lazy_static;
 
     use crate::addresses;
     use crate::data::create_or_update_addresses;
     use crate::db::{init_test_connection_pool, Pool};
     use crate::models::Address;
     use crate::postcode::AddressRecord;
-
-    use super::*;
 
     embed_migrations!("./migrations");
 
@@ -42,8 +40,9 @@ mod tests {
     fn setup() {
         use crate::schema::addresses;
         // Clear data from previous tests
-        let res = diesel::delete(addresses::table)
-            .execute(&POOL.get().unwrap());
+        diesel::delete(addresses::table)
+            .execute(&POOL.get().unwrap())
+            .expect("Couldn't delete addresses table");
     }
 
     fn teardown () {}

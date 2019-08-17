@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::fs::File;
-use std::io::Read;
 
-use actix::{System, SystemRunner};
-use actix_web::client::Client;
+
+
+
+
 use actix_web::web;
-use actix_web::web::Bytes;
-use chrono::{NaiveDateTime, Utc};
+
+use chrono::{Utc};
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
 use futures::Future;
@@ -22,8 +22,7 @@ use crate::db::Pool;
 use crate::models::{Address, NewAddress, NewState, State};
 use crate::postcode::AddressRecord;
 
-const STATE_BODY_LIMIT_BYTES: usize = 2_097_152; // 2MB
-const ZIP_BODY_LIMIT_BYTES: usize = 1_074_000_000; // 1GB
+const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
 const BATCH_SIZE: usize = 2500;
 
@@ -50,22 +49,8 @@ impl std::fmt::Display for RefreshError {
 }
 
 // TODO
-impl From<actix_web::client::SendRequestError> for RefreshError {
-    fn from(error: actix_web::client::SendRequestError) -> Self {
-        OldData
-    }
-}
-
-// TODO
-impl From<actix_web::client::PayloadError> for RefreshError {
-    fn from(error: actix_web::client::PayloadError) -> Self {
-        OldData
-    }
-}
-
-// TODO
 impl From<diesel::result::Error> for RefreshError {
-    fn from(error: diesel::result::Error) -> Self {
+    fn from(_error: diesel::result::Error) -> Self {
 //        use diesel::result::Error;
 //
 //        match error {
@@ -84,6 +69,13 @@ impl From<diesel::result::Error> for RefreshError {
     }
 }
 
+impl From<reqwest::Error> for RefreshError {
+    fn from(_error: reqwest::Error) -> Self {
+        OldData
+    }
+}
+
+#[derive(Debug)]
 pub struct StateInfo {
     pub url: String,
     pub hash: String,
@@ -91,16 +83,14 @@ pub struct StateInfo {
     pub address_count: usize
 }
 
+#[derive(Debug)]
 pub struct StateRefresh {
     pub state_info: Option<StateInfo>,
     pub current_state: Option<State>
 }
 
-pub fn refresh_state(
-    system: &mut SystemRunner,
-    pool: &Pool
-) {
-    let status = system.block_on(futures::lazy(|| { get_state_refresh(pool) }));
+pub fn refresh_state(pool: &PgConnection) {
+    let status = get_state_refresh(pool);
     match status {
         Ok(state_refresh) => {
             match state_refresh.state_info {
@@ -114,7 +104,7 @@ pub fn refresh_state(
                         info!("Data already up to date (state: {})", state_info.version);
                     } else {
                         info!("Updating data...");
-                        match system.block_on(futures::lazy(|| { update_state(pool, state_info) })) {
+                        match update_state(pool, state_info) {
                             Ok(_) => { info!("Successfuly updated data"); },
                             Err(err) => { error!("Error while updating state: {}", err); },
                         };
@@ -134,29 +124,10 @@ pub fn refresh_state(
     };
 }
 
-/// Returns true if the state was updated
-fn get_state_refresh<'a>(pool: &'a Pool) -> impl Future<Item = StateRefresh, Error = RefreshError> + 'a {
-    Client::default()
-        .get("http://results.openaddresses.io/state.txt")
-        .send()
-        .from_err()
-        .and_then(move |mut resp| {
-            resp.body()
-                .limit(STATE_BODY_LIMIT_BYTES)
-                .from_err()
-                .map(move |body| {
-                    let state_info = get_info(body);
-                    let connection = pool.get().unwrap();
-                    let current_state = current_state(&connection);
-                    StateRefresh { state_info, current_state }
-                })
-        })
-}
-
-fn get_info(body: Bytes) -> Option<StateInfo> {
+fn get_info<R: std::io::Read>(response: R) -> Option<StateInfo> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
-        .from_reader(&body[..]);
+        .from_reader(response);
 
     reader
         .records()
@@ -179,6 +150,57 @@ fn get_info(body: Bytes) -> Option<StateInfo> {
         })
 }
 
+pub fn get_state_refresh(conn: &PgConnection) -> Result<StateRefresh, RefreshError> {
+    let response = reqwest::get("http://results.openaddresses.io/state.txt")?;
+    let state_info = get_info(response);
+    let current_state = current_state(&conn);
+    Ok(StateRefresh { state_info, current_state })
+}
+
+fn update_state(
+    conn: &PgConnection,
+    state_info: StateInfo
+) -> Result<(), RefreshError> {
+    info!("Downloading state version {} from {}", state_info.version, state_info.url);
+
+    let mut resp = reqwest::get(&state_info.url)?;
+    let mut buf: Vec<u8> = Vec::with_capacity(APPROXIMATE_ZIP_SIZE_BYTES);
+    resp.copy_to(&mut buf)?;
+    info!("Downloaded zip, size: {} MB", buf.len() / 1_000_000);
+    info!("Searching for csv file");
+
+    let reader = std::io::Cursor::new(&buf);
+    let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
+    let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
+    for i in 0..zip.len() {
+        let file = zip.by_index(i).unwrap();
+        info!("File: {}", file.name());
+        if re.is_match(file.name()) {
+            info!("Found csv file");
+            info!("Updating database records...");
+            let mut reader = csv::Reader::from_reader(file);
+
+            let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
+            let progress_bar = ProgressBar::new(state_info.address_count as u64);
+            for record in reader.deserialize() {
+                let address_record: AddressRecord = record.expect("Could not deserialize post code record");
+                batch.push(address_record);
+                if batch.len() == BATCH_SIZE {
+                    process_batch(&conn, &mut batch, &progress_bar);
+                }
+            };
+            process_batch(&conn, &mut batch, &progress_bar);
+            progress_bar.finish();
+
+            create_new_state(&conn, &state_info);
+            info!("Done");
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 fn current_state(connection: &PgConnection) -> Option<State> {
     use crate::schema::states::dsl::*;
 
@@ -188,60 +210,6 @@ fn current_state(connection: &PgConnection) -> Option<State> {
         .first(connection)
         .optional()
         .unwrap_or(None)
-}
-
-fn update_state<'a>(
-    pool: &'a Pool,
-    state_info: StateInfo
-) -> impl Future<Item = (), Error = RefreshError> + 'a {
-    info!("Downloading state version {} from {}", state_info.version, state_info.url);
-
-    Client::default()
-        .get(&state_info.url)
-        .send()
-        .map_err(RefreshError::from)
-        .and_then(move |mut resp| {
-            resp.body()
-                .limit(ZIP_BODY_LIMIT_BYTES)
-                .from_err()
-                .map(move |body| {
-                    info!("Downloaded zip, size: {} MB", body.len() / 1_000_000);
-                    info!("Searching for csv file");
-
-                    let mut reader = std::io::Cursor::new(body);
-                    let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
-                    let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
-                    for i in 0..zip.len()
-                    {
-                        let file = zip.by_index(i).unwrap();
-                        info!("Filename: {}", file.name());
-                        if re.is_match(file.name()) {
-                            info!("Found csv file");
-                            info!("Updating database records...");
-                            let conn = pool.get().unwrap();
-                            let mut reader = csv::Reader::from_reader(file);
-
-                            let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
-                            let progress_bar = ProgressBar::new(state_info.address_count as u64);
-                            for record in reader.deserialize() {
-                                let address_record: AddressRecord = record.expect("Could not deserialize post code record");
-                                batch.push(address_record);
-                                if batch.len() == BATCH_SIZE {
-                                    process_batch(&conn, &mut batch, &progress_bar);
-                                }
-                            };
-                            process_batch(&conn, &mut batch, &progress_bar);
-                            progress_bar.finish();
-
-                            create_new_state(&conn, &state_info);
-                            info!("Done");
-                            break;
-                        }
-                    }
-
-                    ()
-                })
-        })
 }
 
 fn process_batch(
@@ -335,9 +303,3 @@ pub fn get_addresses(
         .limit(ADDRESSES_RESULT_LIMIT)
         .load(&pool.get().unwrap())
 }
-
-// TODO: try to compose get_state_info and update_state
-// Chaining futures with different return type is a pain
-// Apparently Box<dyn Future<blabla>> can fix the issue
-// But I couldn't get it to compile.
-// Check "Returning from multiple branches" from https://tokio.rs/docs/futures/combinators/#use-impl-future
