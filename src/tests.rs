@@ -42,7 +42,7 @@ mod tests {
     fn setup() {
         use crate::schema::addresses;
         // Clear data from previous tests
-        let res = diesel::delete(addresses::table)
+        diesel::delete(addresses::table)
             .execute(&POOL.get().unwrap());
     }
 

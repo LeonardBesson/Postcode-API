@@ -6,7 +6,7 @@ extern crate dotenv;
 #[macro_use]
 extern crate lazy_static;
 
-use std::io;
+use std::{io, thread};
 
 use actix::fut::ok;
 use actix::{System, Arbiter, Actor, Running, AsyncContext, SystemRunner};
@@ -20,9 +20,7 @@ use futures::{Future, lazy};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 
-use data::refresh_state;
-
-use crate::data::{get_addresses, RefreshError, StateInfo, get_state_refresh2};
+use crate::data::{get_addresses, RefreshError, StateInfo, refresh_state};
 use crate::db::{init_connection_pool, Pool, establish_connection};
 use std::time::Duration;
 
@@ -58,16 +56,22 @@ fn addresses(
     })
 }
 
-struct RefreshStateActor {}
+struct StateRefresher {}
 
-impl Actor for RefreshStateActor {
-    type Context = actix::Context<Self>;
+impl StateRefresher {
+    const INTERVAL_SECS: u64 = 3600 * 4;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.run_interval(Duration::from_secs(3), move |act, ctx| {
-            let conn = establish_connection();
-            info!("Running!")
-        });
+    fn start() {
+        thread::Builder::new()
+            .name("state-refresher".into())
+            .spawn(|| {
+                info!("Starting state refresh every {} hours", Self::INTERVAL_SECS / 3600);
+                loop {
+                    thread::sleep(Duration::from_secs(Self::INTERVAL_SECS));
+                    let conn = establish_connection();
+                    refresh_state(&conn);
+                }
+            });
     }
 }
 
@@ -78,19 +82,10 @@ fn main() -> io::Result<()> {
     let pool = init_connection_pool();
     embedded_migrations::run(&pool.get().unwrap());
 
-    let mut system = System::new("postcode-service");
-    let rstate = get_state_refresh2(&pool);
-    info!("{:?}", rstate.unwrap());
-//    refresh_state(&mut system, &pool);
+    let system = System::new("postcode-service");
+    refresh_state(&pool.get().unwrap());
 
-    let arbiter = Arbiter::new();
-//    let act_pool = &pool.clone();
-    RefreshStateActor::start_in_arbiter(&arbiter, move |ctx| {
-        RefreshStateActor {
-//            system: &mut system,
-//            pool: &pool.clone()
-        }
-    });
+    StateRefresher::start();
 
     HttpServer::new(move || {
         App::new()
@@ -101,7 +96,5 @@ fn main() -> io::Result<()> {
     .bind("127.0.0.1:3000")?
     .start();
 
-    let result = system.run();
-    arbiter.stop();
-    result
+    system.run()
 }
