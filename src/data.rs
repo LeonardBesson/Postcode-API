@@ -1,13 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Formatter;
 
-
-
-
-
 use actix_web::web;
-
-use chrono::{Utc};
+use chrono::Utc;
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
 use futures::Future;
@@ -19,8 +14,7 @@ use zip::ZipArchive;
 
 use crate::data::RefreshError::{NoData, OldData};
 use crate::db::Pool;
-use crate::models::{Address, NewAddress, NewState, State};
-use crate::postcode::AddressRecord;
+use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
 
 const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
@@ -238,8 +232,8 @@ pub fn create_or_update_addresses<'a>(
         let key = (record.postcode.clone(), record.number.clone());
         address_map.insert(key, NewAddress {
             id: Uuid::new_v4(),
-            lon: record.lon as f64,
             lat: record.lat as f64,
+            lon: record.lon as f64,
             number: record.number.as_str(),
             street: record.street.as_str(),
             city: record.city.as_str(),

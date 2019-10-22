@@ -8,13 +8,13 @@ mod tests {
         http::{header, StatusCode}, HttpRequest, HttpResponse, test, web,
     };
     use diesel::RunQueryDsl;
+
     use lazy_static::lazy_static;
 
     use crate::addresses;
     use crate::data::create_or_update_addresses;
     use crate::db::{init_test_connection_pool, Pool};
-    use crate::models::Address;
-    use crate::postcode::AddressRecord;
+    use crate::models::{Address, AddressRecord};
 
     embed_migrations!("./migrations");
 
@@ -161,8 +161,8 @@ mod tests {
             &POOL.get().unwrap(),
             &[
                 AddressRecord {
-                    lon: 1.0,
                     lat: 2.0,
+                    lon: 1.0,
                     number: "1".to_string(),
                     street: "Street".to_string(),
                     city: "City".to_string(),
@@ -170,8 +170,8 @@ mod tests {
                     postcode: "2222AA".to_string()
                 },
                 AddressRecord {
-                    lon: 2.0,
                     lat: 3.0,
+                    lon: 2.0,
                     number: "2".to_string(),
                     street: "Street".to_string(),
                     city: "City".to_string(),
@@ -179,8 +179,8 @@ mod tests {
                     postcode: "2222AA".to_string()
                 },
                 AddressRecord {
-                    lon: 3.0,
                     lat: 4.0,
+                    lon: 3.0,
                     number: "2A".to_string(),
                     street: "Street".to_string(),
                     city: "City".to_string(),
@@ -188,8 +188,8 @@ mod tests {
                     postcode: "2222AA".to_string()
                 },
                 AddressRecord {
-                    lon: 4.0,
                     lat: 5.0,
+                    lon: 4.0,
                     number: "2B".to_string(),
                     street: "Street".to_string(),
                     city: "City".to_string(),

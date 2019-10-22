@@ -22,7 +22,6 @@ mod schema;
 mod data;
 mod db;
 mod models;
-mod postcode;
 mod tests;
 mod state_refresher;
 
@@ -74,7 +73,7 @@ fn main() -> io::Result<()> {
             .wrap(Logger::default())
             .route("/addresses", web::get().to_async(addresses))
     })
-    .bind("127.0.0.1:3000")?
+    .bind("0.0.0.0:3000")?
     .start();
 
     system.run()
