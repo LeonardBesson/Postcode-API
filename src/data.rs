@@ -14,12 +14,15 @@ use zip::ZipArchive;
 use crate::data::RefreshError::{NoData, OldData};
 use crate::db::Pool;
 use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
+use reqwest::{Response, Error};
 
 const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
 const BATCH_SIZE: usize = 2500;
 
 const ADDRESSES_RESULT_LIMIT: i64 = 200;
+
+const STATE_INFO_URL: &str = "http://results.openaddresses.io/state.txt";
 
 #[derive(Debug)]
 pub enum RefreshError {
@@ -77,44 +80,38 @@ pub struct StateInfo {
 }
 
 #[derive(Debug)]
-pub struct StateRefresh {
+pub struct DataStatus {
     pub state_info: Option<StateInfo>,
     pub current_state: Option<State>
 }
 
 pub fn refresh_state(pool: &PgConnection) {
-    let status = get_state_refresh(pool);
-    match status {
-        Ok(state_refresh) => {
-            match state_refresh.state_info {
-                Some(state_info) => {
-                    let up_to_date = state_refresh
-                        .current_state
-                        .filter(|s| s.version == state_info.version)
-                        .is_some();
+    let status = get_data_status(pool);
+    match status.state_info {
+        Some(state_info) => {
+            let up_to_date = status
+                .current_state
+                .filter(|s| s.version == state_info.version)
+                .is_some();
 
-                    if up_to_date {
-                        info!("Data already up to date (state: {})", state_info.version);
-                    } else {
-                        info!("Updating data...");
-                        match update_state(pool, state_info) {
-                            Ok(_) => { info!("Successfuly updated data"); },
-                            Err(err) => { error!("Error while updating state: {}", err); },
-                        };
-                    }
-                },
-                None => {
-                    if state_refresh.current_state.is_none() {
-                        panic!("Couldn't fetch data and no fallback");
-                    } else {
-                        info!("Falling back");
-                    };
-                }
+            if up_to_date {
+                info!("Data already up to date (state: {})", state_info.version);
+            } else {
+                info!("Updating data...");
+                match update_state(pool, state_info) {
+                    Ok(_) => { info!("Successfuly updated data"); },
+                    Err(err) => { error!("Error while updating state: {}", err); },
+                };
             }
         },
-        Err(RefreshError::NoData) => { panic!("Couldn't fetch data and no fallback"); },
-        Err(RefreshError::OldData) => { error!("Falling back"); }
-    };
+        None => {
+            if status.current_state.is_none() {
+                panic!("Couldn't fetch data and no fallback");
+            } else {
+                info!("Falling back");
+            };
+        }
+    }
 }
 
 fn get_info<R: std::io::Read>(response: R) -> Option<StateInfo> {
@@ -143,11 +140,20 @@ fn get_info<R: std::io::Read>(response: R) -> Option<StateInfo> {
         })
 }
 
-pub fn get_state_refresh(conn: &PgConnection) -> Result<StateRefresh, RefreshError> {
-    let response = reqwest::get("http://results.openaddresses.io/state.txt")?;
-    let state_info = get_info(response);
+pub fn get_data_status(conn: &PgConnection) -> DataStatus {
+    info!("Fetching state info at {}", STATE_INFO_URL);
+    let response = reqwest::get(STATE_INFO_URL);
     let current_state = current_state(&conn);
-    Ok(StateRefresh { state_info, current_state })
+    match response {
+        Ok(resp) => {
+            let state_info = get_info(resp);
+            DataStatus { state_info, current_state }
+        },
+        Err(err) => {
+            error!("Error fetching state info: {}", err);
+            DataStatus { state_info: None, current_state }
+        },
+    }
 }
 
 fn update_state(
