@@ -221,7 +221,8 @@ pub fn create_or_update_addresses<'a>(
 ) {
     use crate::schema::addresses::dsl::*;
 
-    // Filter duplicates because the same address sometimes have different coordinates, for example:
+    // Filter duplicates because the same address sometimes has multiple
+    // entries in the CSV with different coordinates, for example:
     // 4.6863255,52.3094285,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,7c3c022a3d3d5f99
     // 4.6863538,52.3094487,1115,Kruisweg,,Hoofddorp,,Noord-Holland,2131CV,,857b39c71594b270
     let mut address_map: HashMap<(String, String), NewAddress> =
