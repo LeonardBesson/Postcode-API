@@ -5,7 +5,7 @@ mod tests {
     use actix_web::{
         App,
         dev::Service,
-        http::{header, StatusCode}, HttpRequest, HttpResponse, test, web,
+        http::StatusCode, HttpRequest, HttpResponse, test, web,
     };
     use diesel::RunQueryDsl;
 
@@ -22,7 +22,8 @@ mod tests {
         static ref POOL: Pool = {
             let pool = init_test_connection_pool();
             // Run migrations once for all tests
-            embedded_migrations::run(&pool.get().unwrap());
+            embedded_migrations::run(&pool.get().unwrap())
+                .expect("Error while running migrations");
             pool
         };
     }
