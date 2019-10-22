@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 pub struct StateRefresher {}
 
 impl StateRefresher {
-    const INTERVAL_SECS: u64 = 3600 * 4;
+    const INTERVAL_SECS: u64 = 3600 * 24;
 
     pub fn start() -> io::Result<JoinHandle<()>> {
         thread::Builder::new()
