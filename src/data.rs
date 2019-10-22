@@ -5,7 +5,6 @@ use actix_web::web;
 use chrono::Utc;
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
-use futures::Future;
 use indicatif::ProgressBar;
 use log::{error, info};
 use regex::Regex;
