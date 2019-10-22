@@ -22,7 +22,6 @@ mod schema;
 mod data;
 mod db;
 mod models;
-mod postcode;
 mod tests;
 mod state_refresher;
 

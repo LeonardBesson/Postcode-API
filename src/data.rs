@@ -1,13 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Formatter;
 
-
-
-
-
 use actix_web::web;
-
-use chrono::{Utc};
+use chrono::Utc;
 use diesel::pg::upsert::excluded;
 use diesel::prelude::*;
 use futures::Future;
@@ -19,8 +14,7 @@ use zip::ZipArchive;
 
 use crate::data::RefreshError::{NoData, OldData};
 use crate::db::Pool;
-use crate::models::{Address, NewAddress, NewState, State};
-use crate::postcode::AddressRecord;
+use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
 
 const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
