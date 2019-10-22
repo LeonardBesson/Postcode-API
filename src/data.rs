@@ -244,7 +244,7 @@ pub fn create_or_update_addresses<'a>(
         .values()
         .collect::<Vec<&NewAddress>>();
 
-    diesel::insert_into(addresses)
+    let result = diesel::insert_into(addresses)
         .values(new_addresses)
         .on_conflict((postcode, number))
         .do_update()
@@ -255,10 +255,11 @@ pub fn create_or_update_addresses<'a>(
             city.eq(excluded(city)),
             region.eq(excluded(region))
         ))
-        .execute(conn)
-        .map_err(|err|
-            error!("Error saving new address: {}", err)
-        );
+        .execute(conn);
+
+    if let Err(err) = result {
+        error!("Error saving new address: {}", err)
+    }
 }
 
 fn create_new_state(conn: &PgConnection, state_info: &StateInfo) {
@@ -271,12 +272,13 @@ fn create_new_state(conn: &PgConnection, state_info: &StateInfo) {
         processed_at: Utc::now().naive_utc()
     };
 
-    diesel::insert_into(states)
+    let result = diesel::insert_into(states)
         .values(new_state)
-        .execute(conn)
-        .map_err(|err|
-            error!("Could not create new state: {}", err)
-        );
+        .execute(conn);
+
+    if let Err(err) = result {
+        error!("Could not create new state: {}", err)
+    }
 }
 
 pub fn get_addresses(
