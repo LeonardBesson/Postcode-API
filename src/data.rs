@@ -11,10 +11,9 @@ use regex::Regex;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::data::RefreshError::{NoData, OldData};
+use crate::data::RefreshError::Network;
 use crate::db::Pool;
 use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
-use reqwest::{Response, Error};
 
 const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
@@ -26,48 +25,16 @@ const STATE_INFO_URL: &str = "http://results.openaddresses.io/state.txt";
 
 #[derive(Debug)]
 pub enum RefreshError {
-    /// Couldn't fetch data and there is no old data to fallback to
-    NoData,
-    /// Couldn't fetch new data but there is old data to fallback to
-    OldData,
-
-    // TODO: add one with cause messsage
+    /// Couldn't fetch data status or data, contains the original error
+    Network(Box<dyn std::error::Error>)
 }
 
 impl std::fmt::Display for RefreshError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let msg = match self {
-            NoData => { "Error refresh state. No fallback data" },
-            OldData => { "Error refresh state. Fallback data available" },
+            Network(inner) => { format!("Network error: {}", inner) },
         };
         write!(f, "{}", msg)
-    }
-}
-
-// TODO
-impl From<diesel::result::Error> for RefreshError {
-    fn from(_error: diesel::result::Error) -> Self {
-//        use diesel::result::Error;
-//
-//        match error {
-//            Error::InvalidCString(_) => {},
-//            Error::DatabaseError(_, _) => {},
-//            Error::NotFound => {},
-//            Error::QueryBuilderError(_) => {},
-//            Error::DeserializationError(_) => {},
-//            Error::SerializationError(_) => {},
-//            Error::RollbackTransaction => {},
-//            Error::AlreadyInTransaction => {},
-//            Error::__Nonexhaustive => {},
-//        }
-
-        OldData
-    }
-}
-
-impl From<reqwest::Error> for RefreshError {
-    fn from(_error: reqwest::Error) -> Self {
-        OldData
     }
 }
 
@@ -91,6 +58,7 @@ pub fn refresh_state(pool: &PgConnection) {
         Some(state_info) => {
             let up_to_date = status
                 .current_state
+                .as_ref()
                 .filter(|s| s.version == state_info.version)
                 .is_some();
 
@@ -100,13 +68,19 @@ pub fn refresh_state(pool: &PgConnection) {
                 info!("Updating data...");
                 match update_state(pool, state_info) {
                     Ok(_) => { info!("Successfuly updated data"); },
-                    Err(err) => { error!("Error while updating state: {}", err); },
+                    Err(err) => {
+                        if status.current_state.is_none() {
+                            panic!("Couldn't update data, and no fallback is available");
+                        } else {
+                            error!("Error while updating state: {}", err);
+                        };
+                    },
                 };
             }
         },
         None => {
             if status.current_state.is_none() {
-                panic!("Couldn't fetch data and no fallback");
+                panic!("Couldn't fetch data, and no fallback is available");
             } else {
                 info!("Falling back");
             };
@@ -162,9 +136,9 @@ fn update_state(
 ) -> Result<(), RefreshError> {
     info!("Downloading state version {} from {}", state_info.version, state_info.url);
 
-    let mut resp = reqwest::get(&state_info.url)?;
+    let mut resp = reqwest::get(&state_info.url).map_err(|err| Network(Box::new(err)))?;
     let mut buf: Vec<u8> = Vec::with_capacity(APPROXIMATE_ZIP_SIZE_BYTES);
-    resp.copy_to(&mut buf)?;
+    resp.copy_to(&mut buf).map_err(|err| Network(Box::new(err)))?;
     info!("Downloaded zip, size: {} MB", buf.len() / 1_000_000);
     info!("Searching for csv file");
 
