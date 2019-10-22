@@ -259,7 +259,7 @@ pub fn create_or_update_addresses<'a>(
         .execute(conn);
 
     if let Err(err) = result {
-        error!("Error saving new address: {}", err)
+        error!("Error saving new address: {}", err);
     }
 }
 
@@ -278,7 +278,7 @@ fn create_new_state(conn: &PgConnection, state_info: &StateInfo) {
         .execute(conn);
 
     if let Err(err) = result {
-        error!("Could not create new state: {}", err)
+        error!("Could not create new state: {}", err);
     }
 }
 

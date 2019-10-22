@@ -30,6 +30,7 @@ pub fn init_connection_pool() -> Pool {
         .expect("Failed to create db pool")
 }
 
+#[allow(dead_code)] // It's used inside a macro
 pub fn init_test_connection_pool() -> Pool {
     dotenv().ok();
 
