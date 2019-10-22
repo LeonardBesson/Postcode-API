@@ -47,6 +47,7 @@ pub struct NewAddress<'a> {
     pub postcode: &'a str
 }
 
+// Used as CSV record model
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct AddressRecord {
