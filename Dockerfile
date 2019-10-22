@@ -5,7 +5,6 @@ RUN apt-get update && apt-get -y install ca-certificates cmake libssl-dev && rm 
 COPY . .
 
 RUN rustup target add x86_64-unknown-linux-gnu
-# Sets the environment variable for the cargo build command that follows.
 ENV PKG_CONFIG_ALLOW_CROSS=1
 RUN cargo build --target x86_64-unknown-linux-gnu --release
 
