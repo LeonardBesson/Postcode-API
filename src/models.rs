@@ -25,8 +25,8 @@ pub struct NewState<'a> {
 #[derive(Serialize, Deserialize, Queryable, Debug)]
 pub struct Address {
     pub id: Uuid,
-    pub lon: f64,
     pub lat: f64,
+    pub lon: f64,
     pub number: String,
     pub street: String,
     pub city: String,
@@ -38,8 +38,8 @@ pub struct Address {
 #[table_name="addresses"]
 pub struct NewAddress<'a> {
     pub id: Uuid,
-    pub lon: f64,
     pub lat: f64,
+    pub lon: f64,
     pub number: &'a str,
     pub street: &'a str,
     pub city: &'a str,

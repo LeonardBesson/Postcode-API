@@ -238,8 +238,8 @@ pub fn create_or_update_addresses<'a>(
         let key = (record.postcode.clone(), record.number.clone());
         address_map.insert(key, NewAddress {
             id: Uuid::new_v4(),
-            lon: record.lon as f64,
             lat: record.lat as f64,
+            lon: record.lon as f64,
             number: record.number.as_str(),
             street: record.street.as_str(),
             city: record.city.as_str(),
