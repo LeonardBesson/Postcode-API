@@ -7,7 +7,6 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix = "0.8.3"
 actix-rt = "1.0.0"
 actix-web = "2.0.0"
 csv = "1.1.1"
@@ -16,7 +15,6 @@ diesel = { version = "1.4.2", features = ["postgres", "uuidv07", "chrono", "r2d2
 diesel_migrations = "1.4.0"
 env_logger = "0.6.2"
 log = "0.4.7"
-futures = "0.1.28"
 uuid = { version = "0.7.4", features = ["serde", "v4"] }
 chrono = "0.4.7"
 zip = "0.5.2"
