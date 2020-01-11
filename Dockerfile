@@ -1,4 +1,4 @@
-FROM rust:1.38 as builder
+FROM rust:1.40 as builder
 
 RUN apt-get update && apt-get -y install ca-certificates cmake libssl-dev && rm -rf /var/lib/apt/lists/*
 
