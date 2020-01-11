@@ -22,7 +22,7 @@ mod schema;
 mod data;
 mod db;
 mod models;
-mod tests;
+//mod tests;
 mod state_refresher;
 
 #[derive(Deserialize)]
@@ -31,29 +31,32 @@ pub struct AddressRequest {
     number: Option<String>
 }
 
-fn addresses(
+async fn addresses(
     request: web::Query<AddressRequest>,
     pool: web::Data<Pool>
-) -> impl Future<Item = HttpResponse, Error = Error> {
-    web::block(move || {
+) -> Result<HttpResponse, Error> {
+    let result = web::block(move || {
         get_addresses(
             pool,
             &request.postcode,
             request.number.as_ref().map(|n| n.as_str())
         )
     })
-    .then(|res| match res {
+    .await;
+
+    match result {
         Ok(addresses) => { Ok(HttpResponse::Ok().json(addresses)) },
         Err(err) => {
             error!("Error while retrieving addresses: {}", err);
             Ok(HttpResponse::InternalServerError().finish())
         },
-    })
+    }
 }
 
 embed_migrations!("./migrations");
 
-fn main() -> io::Result<()> {
+#[actix_rt::main]
+async fn main() -> io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
 
@@ -61,7 +64,6 @@ fn main() -> io::Result<()> {
     embedded_migrations::run(&pool.get().unwrap())
         .expect("Error while running migrations");
 
-    let system = System::new("postcode-service");
     refresh_state(&pool.get().unwrap());
 
     StateRefresher::start()
@@ -71,10 +73,9 @@ fn main() -> io::Result<()> {
         App::new()
             .data(pool.clone())
             .wrap(Logger::default())
-            .route("/addresses", web::get().to_async(addresses))
+            .route("/addresses", web::get().to(addresses))
     })
     .bind("0.0.0.0:3000")?
-    .start();
-
-    system.run()
+    .run()
+    .await
 }
