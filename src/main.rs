@@ -69,6 +69,7 @@ async fn main() -> io::Result<()> {
         error!("Error while refreshing state: {}", err);
     };
 
+    // TODO: move to async/await
 //    StateRefresher::start()
 //        .expect("Could not start background state refresh thread");
 

@@ -169,15 +169,18 @@ async fn update_state(
     state_info: StateInfo
 ) -> Result<(), RefreshError> {
     info!("Downloading state version {} from {}", state_info.version, state_info.url);
-    let conn = pool.get().unwrap();
     let resp_bytes = reqwest::get(&state_info.url)
         .await?
         .bytes()
         .await?;
 
+    // TODO: If 403, try again with browser user agent
+    // as it appears to be blocked otherwise sometimes!
+
     info!("Downloaded zip, size: {} MB", resp_bytes.len() / 1_000_000);
     info!("Searching for csv file");
 
+    let conn = pool.get().unwrap();
     web::block(move || {
         let reader = std::io::Cursor::new(&resp_bytes);
         let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
