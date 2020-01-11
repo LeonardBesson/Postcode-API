@@ -9,7 +9,7 @@ use std::io;
 use actix_web::{App, Error, HttpResponse, HttpServer, web};
 use actix_web::middleware::Logger;
 use env_logger;
-use log::error;
+use log::{error, info};
 use serde::Deserialize;
 
 use crate::data::{get_addresses, refresh_state};
@@ -59,13 +59,18 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     let pool = init_connection_pool();
-    embedded_migrations::run(&pool.get().unwrap())
+    let conn = pool.get().unwrap();
+
+    web::block(move || { embedded_migrations::run(&conn) })
+        .await
         .expect("Error while running migrations");
 
-    refresh_state(&pool.get().unwrap());
+    if let Err(err) = refresh_state(&pool).await {
+        error!("Error while refreshing state: {}", err);
+    };
 
-    StateRefresher::start()
-        .expect("Could not start background state refresh thread");
+//    StateRefresher::start()
+//        .expect("Could not start background state refresh thread");
 
     HttpServer::new(move || {
         App::new()

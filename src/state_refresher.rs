@@ -10,16 +10,16 @@ pub struct StateRefresher {}
 impl StateRefresher {
     const INTERVAL_SECS: u64 = 3600 * 24;
 
-    pub fn start() -> io::Result<JoinHandle<()>> {
-        thread::Builder::new()
-            .name("state-refresher".into())
-            .spawn(|| {
-                info!("Starting state refresh every {} hours", Self::INTERVAL_SECS / 3600);
-                loop {
-                    thread::sleep(Duration::from_secs(Self::INTERVAL_SECS));
-                    let conn = establish_connection();
-                    refresh_state(&conn);
-                }
-            })
-    }
+//    pub fn start() -> io::Result<JoinHandle<()>> {
+//        thread::Builder::new()
+//            .name("state-refresher".into())
+//            .spawn(|| {
+//                info!("Starting state refresh every {} hours", Self::INTERVAL_SECS / 3600);
+//                loop {
+//                    thread::sleep(Duration::from_secs(Self::INTERVAL_SECS));
+//                    let conn = establish_connection();
+//                    refresh_state(&conn);
+//                }
+//            })
+//    }
 }
