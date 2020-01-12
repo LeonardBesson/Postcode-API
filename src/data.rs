@@ -15,8 +15,6 @@ use crate::db::Pool;
 use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
 use crate::utils::ExistsExtension;
 
-const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
-
 const BATCH_SIZE: usize = 2500;
 
 const ADDRESSES_RESULT_LIMIT: i64 = 200;

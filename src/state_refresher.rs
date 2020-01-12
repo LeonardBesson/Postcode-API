@@ -1,9 +1,7 @@
-use std::{thread, io};
 use std::time::Duration;
-use crate::db::{establish_connection, Pool};
+use crate::db::Pool;
 use crate::data::refresh_state;
-use log::info;
-use std::thread::JoinHandle;
+use log::{error, info};
 
 pub struct StateRefresher {
     pub interval: Duration,
@@ -24,7 +22,9 @@ impl StateRefresher {
         loop {
             interval.tick().await;
             info!("StateRefresher: refreshing data...");
-            refresh_state(&pool).await;
+            if let Err(err) = refresh_state(&pool).await {
+                error!("Error while refreshing state: {}", err);
+            }
         }
     }
 }

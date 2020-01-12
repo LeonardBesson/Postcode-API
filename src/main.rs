@@ -9,7 +9,7 @@ use std::io;
 use actix_web::{App, Error, HttpResponse, HttpServer, web};
 use actix_web::middleware::Logger;
 use env_logger;
-use log::{error, info};
+use log::error;
 use serde::Deserialize;
 
 use crate::data::{get_addresses, refresh_state};
