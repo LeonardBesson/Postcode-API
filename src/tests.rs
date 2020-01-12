@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::panic;
-
     use actix_web::{
         App,
         dev::Service,
@@ -15,6 +13,7 @@ mod tests {
     use crate::data::create_or_update_addresses;
     use crate::db::{init_test_connection_pool, Pool};
     use crate::models::{Address, AddressRecord};
+    use futures::FutureExt;
 
     embed_migrations!("./migrations");
 
@@ -28,98 +27,111 @@ mod tests {
         };
     }
 
-    fn run_test<T, R>(test: T) -> R
-        where T: FnOnce() -> R + panic::UnwindSafe
+    async fn run_test<F, R>(test: F) -> R
+        where F: std::future::Future<Output = R>
     {
-        setup();
-        let result = panic::catch_unwind(|| { test() });
-        teardown();
+        setup().await;
+        // Make the fut UnwindSafe in order to catch unwind it.
+        // That way we can run teardown even in case of failure.
+        let test_fut = std::panic::AssertUnwindSafe(test).catch_unwind();
+        let result = test_fut.await;
+        teardown().await;
         assert!(result.is_ok());
         result.unwrap()
     }
 
-    fn setup() {
+    async fn setup() {
         use crate::schema::addresses;
         // Clear data from previous tests
-        diesel::delete(addresses::table)
-            .execute(&POOL.get().unwrap())
-            .expect("Couldn't delete addresses table");
+        web::block(|| {
+            diesel::delete(addresses::table)
+                .execute(&POOL.get().unwrap())
+        })
+        .await
+        .expect("Couldn't delete addresses table");
     }
 
-    fn teardown () {}
+    async fn teardown () {}
 
-    #[test]
-    fn test_get_addresses_missing_query_param() {
-        run_test(|| {
+    #[actix_rt::test]
+    async fn test_get_addresses_missing_query_param() {
+        run_test(async {
             let mut app = test::init_service(
                 App::new()
                     .data(POOL.clone())
-                    .route("/addresses", web::get().to_async(addresses))
-            );
+                    .route("/addresses", web::get().to(addresses))
+            )
+            .await;
 
             let req = test::TestRequest::get()
                 .uri("/addresses")
                 .to_request();
 
-            let resp = test::block_on(app.call(req)).unwrap();
+            let resp = app.call(req).await.unwrap();
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         })
+        .await
     }
 
-    #[test]
-    fn test_get_no_addresses() {
-        run_test(|| {
+    #[actix_rt::test]
+    async fn test_get_no_addresses() {
+        run_test(async {
             let mut app = test::init_service(
                 App::new()
                     .data(POOL.clone())
-                    .route("/addresses", web::get().to_async(addresses))
-            );
+                    .route("/addresses", web::get().to(addresses))
+            )
+            .await;
 
             let req = test::TestRequest::get()
                 .uri("/addresses?postcode=2222AA")
                 .to_request();
 
-            let resp: Vec<Address> = test::read_response_json(&mut app, req);
+            let resp: Vec<Address> = test::read_response_json(&mut app, req).await;
             assert_eq!(resp.len(), 0);
         })
+        .await
     }
 
-    #[test]
-    fn test_get_addresses_postcode_only() {
-        run_test(|| {
+    #[actix_rt::test]
+    async fn test_get_addresses_postcode_only() {
+        run_test(async {
             let mut app = test::init_service(
                 App::new()
                     .data(POOL.clone())
-                    .route("/addresses", web::get().to_async(addresses))
-            );
+                    .route("/addresses", web::get().to(addresses))
+            )
+            .await;
 
-            create_test_set();
+            create_test_set().await;
 
             let req = test::TestRequest::get()
                 .uri("/addresses?postcode=2222AA")
                 .to_request();
 
-            let resp: Vec<Address> = test::read_response_json(&mut app, req);
+            let resp: Vec<Address> = test::read_response_json(&mut app, req).await;
             assert_eq!(resp.len(), 4);
         })
+        .await
     }
 
-    #[test]
-    fn test_get_addresses_postcode_and_number() {
-        run_test(|| {
+    #[actix_rt::test]
+    async fn test_get_addresses_postcode_and_number() {
+        run_test(async {
             let mut app = test::init_service(
                 App::new()
                     .data(POOL.clone())
-                    .route("/addresses", web::get().to_async(addresses))
-            );
+                    .route("/addresses", web::get().to(addresses))
+            )
+            .await;
 
-            create_test_set();
+            create_test_set().await;
 
             let req = test::TestRequest::get()
                 .uri("/addresses?postcode=2222AA&number=1")
                 .to_request();
 
-            let resp: Vec<Address> = test::read_response_json(&mut app, req);
+            let resp: Vec<Address> = test::read_response_json(&mut app, req).await;
             assert_eq!(resp.len(), 1);
             assert_eq!(resp[0].postcode, "2222AA");
             assert_eq!(resp[0].number, "1");
@@ -128,7 +140,7 @@ mod tests {
                 .uri("/addresses?postcode=2222AA&number=2")
                 .to_request();
 
-            let resp: Vec<Address> = test::read_response_json(&mut app, req);
+            let resp: Vec<Address> = test::read_response_json(&mut app, req).await;
             assert_eq!(resp.len(), 3);
             assert_eq!(resp[0].postcode, "2222AA");
             assert_eq!(resp[0].number, "2");
@@ -141,7 +153,7 @@ mod tests {
                 .uri("/addresses?postcode=2222AA&number=2A")
                 .to_request();
 
-            let resp: Vec<Address> = test::read_response_json(&mut app, req);
+            let resp: Vec<Address> = test::read_response_json(&mut app, req).await;
             assert_eq!(resp.len(), 1);
             assert_eq!(resp[0].postcode, "2222AA");
             assert_eq!(resp[0].number, "2A");
@@ -150,54 +162,59 @@ mod tests {
                 .uri("/addresses?postcode=2222AA&number=2B")
                 .to_request();
 
-            let resp: Vec<Address> = test::read_response_json(&mut app, req);
+            let resp: Vec<Address> = test::read_response_json(&mut app, req).await;
             assert_eq!(resp.len(), 1);
             assert_eq!(resp[0].postcode, "2222AA");
             assert_eq!(resp[0].number, "2B");
         })
+        .await
     }
 
-    fn create_test_set() {
-        create_or_update_addresses(
-            &POOL.get().unwrap(),
-            &[
-                AddressRecord {
-                    lat: 2.0,
-                    lon: 1.0,
-                    number: "1".to_string(),
-                    street: "Street".to_string(),
-                    city: "City".to_string(),
-                    region: "Region".to_string(),
-                    postcode: "2222AA".to_string()
-                },
-                AddressRecord {
-                    lat: 3.0,
-                    lon: 2.0,
-                    number: "2".to_string(),
-                    street: "Street".to_string(),
-                    city: "City".to_string(),
-                    region: "Region".to_string(),
-                    postcode: "2222AA".to_string()
-                },
-                AddressRecord {
-                    lat: 4.0,
-                    lon: 3.0,
-                    number: "2A".to_string(),
-                    street: "Street".to_string(),
-                    city: "City".to_string(),
-                    region: "Region".to_string(),
-                    postcode: "2222AA".to_string()
-                },
-                AddressRecord {
-                    lat: 5.0,
-                    lon: 4.0,
-                    number: "2B".to_string(),
-                    street: "Street".to_string(),
-                    city: "City".to_string(),
-                    region: "Region".to_string(),
-                    postcode: "2222AA".to_string()
-                },
-            ]
-        );
+    async fn create_test_set() {
+        web::block(|| {
+            create_or_update_addresses(
+                &POOL.get().unwrap(),
+                &[
+                    AddressRecord {
+                        lat: 2.0,
+                        lon: 1.0,
+                        number: "1".to_string(),
+                        street: "Street".to_string(),
+                        city: "City".to_string(),
+                        region: "Region".to_string(),
+                        postcode: "2222AA".to_string()
+                    },
+                    AddressRecord {
+                        lat: 3.0,
+                        lon: 2.0,
+                        number: "2".to_string(),
+                        street: "Street".to_string(),
+                        city: "City".to_string(),
+                        region: "Region".to_string(),
+                        postcode: "2222AA".to_string()
+                    },
+                    AddressRecord {
+                        lat: 4.0,
+                        lon: 3.0,
+                        number: "2A".to_string(),
+                        street: "Street".to_string(),
+                        city: "City".to_string(),
+                        region: "Region".to_string(),
+                        postcode: "2222AA".to_string()
+                    },
+                    AddressRecord {
+                        lat: 5.0,
+                        lon: 4.0,
+                        number: "2B".to_string(),
+                        street: "Street".to_string(),
+                        city: "City".to_string(),
+                        region: "Region".to_string(),
+                        postcode: "2222AA".to_string()
+                    },
+                ]
+            )
+        })
+        .await
+        .expect("Error creating tests data");
     }
 }

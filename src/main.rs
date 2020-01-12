@@ -20,7 +20,7 @@ mod schema;
 mod data;
 mod db;
 mod models;
-//mod tests;
+mod tests;
 mod state_refresher;
 mod utils;
 
