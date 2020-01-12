@@ -1,25 +1,30 @@
 use std::{thread, io};
 use std::time::Duration;
-use crate::db::establish_connection;
+use crate::db::{establish_connection, Pool};
 use crate::data::refresh_state;
 use log::info;
 use std::thread::JoinHandle;
 
-pub struct StateRefresher {}
+pub struct StateRefresher {
+    pub interval: Duration,
+    // If the first tick should be immediate
+    pub immediate: bool
+}
 
 impl StateRefresher {
-    const INTERVAL_SECS: u64 = 3600 * 24;
+    pub fn new(interval: Duration, immediate: bool) -> Self {
+        Self { interval, immediate }
+    }
 
-//    pub fn start() -> io::Result<JoinHandle<()>> {
-//        thread::Builder::new()
-//            .name("state-refresher".into())
-//            .spawn(|| {
-//                info!("Starting state refresh every {} hours", Self::INTERVAL_SECS / 3600);
-//                loop {
-//                    thread::sleep(Duration::from_secs(Self::INTERVAL_SECS));
-//                    let conn = establish_connection();
-//                    refresh_state(&conn);
-//                }
-//            })
-//    }
+    pub async fn start(self, pool: &Pool) {
+        let mut interval = actix_rt::time::interval(self.interval);
+        if !self.immediate {
+            interval.tick().await;
+        }
+        loop {
+            interval.tick().await;
+            info!("StateRefresher: refreshing data...");
+            refresh_state(&pool).await;
+        }
+    }
 }

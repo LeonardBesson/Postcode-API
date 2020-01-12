@@ -15,6 +15,7 @@ use serde::Deserialize;
 use crate::data::{get_addresses, refresh_state};
 use crate::db::{init_connection_pool, Pool};
 use crate::state_refresher::StateRefresher;
+use std::time::Duration;
 
 mod schema;
 mod data;
@@ -23,6 +24,8 @@ mod models;
 mod tests;
 mod state_refresher;
 mod utils;
+
+const DATA_REFRESH_INTERVAL_SECS: u64 = 3600 * 24;
 
 #[derive(Deserialize)]
 pub struct AddressRequest {
@@ -70,9 +73,15 @@ async fn main() -> io::Result<()> {
         error!("Error while refreshing state: {}", err);
     };
 
-    // TODO: move to async/await
-//    StateRefresher::start()
-//        .expect("Could not start background state refresh thread");
+    // Start background periodic state refresh
+    let refresher_pool = pool.clone();
+    actix_rt::spawn(async move {
+        let state_refresher = StateRefresher::new(
+            Duration::from_secs(DATA_REFRESH_INTERVAL_SECS),
+            false
+        );
+        state_refresher.start(&refresher_pool).await;
+    });
 
     HttpServer::new(move || {
         App::new()
