@@ -22,6 +22,8 @@ const ADDRESSES_RESULT_LIMIT: i64 = 200;
 
 const STATE_INFO_URL: &str = "http://results.openaddresses.io/state.txt";
 
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36";
+
 #[derive(Debug)]
 pub struct RefreshError(Box<dyn std::fmt::Debug + Send>);
 
@@ -169,13 +171,14 @@ async fn update_state(
     state_info: StateInfo
 ) -> Result<(), RefreshError> {
     info!("Downloading state version {} from {}", state_info.version, state_info.url);
-    let resp_bytes = reqwest::get(&state_info.url)
+    let resp_bytes = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()?
+        .get(&state_info.url)
+        .send()
         .await?
         .bytes()
         .await?;
-
-    // TODO: If 403, try again with browser user agent
-    // as it appears to be blocked otherwise sometimes!
 
     info!("Downloaded zip, size: {} MB", resp_bytes.len() / 1_000_000);
     info!("Searching for csv file");
