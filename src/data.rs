@@ -13,6 +13,7 @@ use zip::ZipArchive;
 
 use crate::db::Pool;
 use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
+use crate::utils::ExistsExtension;
 
 const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
 
@@ -74,9 +75,7 @@ pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
         Some(state_info) => {
             let up_to_date = status
                 .current_state
-                .as_ref()
-                .filter(|s| s.version == state_info.version)
-                .is_some();
+                .exists(|s| s.version == state_info.version);
 
             if up_to_date {
                 info!("Data already up to date (state: {})", state_info.version);
@@ -98,7 +97,7 @@ pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
                 panic!("Couldn't fetch data info, and no fallback is available");
             } else {
                 info!("Falling back to current state");
-            };
+            }
         }
     }
     Ok(())

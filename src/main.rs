@@ -22,6 +22,7 @@ mod db;
 mod models;
 //mod tests;
 mod state_refresher;
+mod utils;
 
 #[derive(Deserialize)]
 pub struct AddressRequest {
