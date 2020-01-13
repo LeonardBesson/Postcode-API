@@ -3,7 +3,7 @@ mod tests {
     use actix_web::{
         App,
         dev::Service,
-        http::StatusCode, HttpRequest, HttpResponse, test, web,
+        http::StatusCode, test, web,
     };
     use diesel::RunQueryDsl;
 
