@@ -11,11 +11,9 @@ use regex::Regex;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::data::RefreshError::Network;
 use crate::db::Pool;
 use crate::models::{Address, AddressRecord, NewAddress, NewState, State};
-
-const APPROXIMATE_ZIP_SIZE_BYTES: usize = 200_097_152; // 200 MB
+use crate::utils::ExistsExtension;
 
 const BATCH_SIZE: usize = 2500;
 
@@ -23,18 +21,35 @@ const ADDRESSES_RESULT_LIMIT: i64 = 200;
 
 const STATE_INFO_URL: &str = "http://results.openaddresses.io/state.txt";
 
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36";
+
 #[derive(Debug)]
-pub enum RefreshError {
-    /// Couldn't fetch data status or data, contains the original error
-    Network(Box<dyn std::error::Error>)
-}
+pub struct RefreshError(Box<dyn std::fmt::Debug + Send>);
 
 impl std::fmt::Display for RefreshError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let msg = match self {
-            Network(inner) => { format!("Network error: {}", inner) },
-        };
-        write!(f, "{}", msg)
+        write!(f, "{}", format!("Refresh error: {:?}", self.0))
+    }
+}
+
+impl From<diesel::result::Error> for RefreshError {
+    fn from(error: diesel::result::Error) -> Self {
+        RefreshError(Box::new(error))
+    }
+}
+
+impl <E: std::fmt::Debug + Send + 'static> From<actix_web::error::BlockingError<E>> for RefreshError {
+    fn from(error: actix_web::error::BlockingError<E>) -> Self {
+        match error {
+            actix_web::error::BlockingError::Error(inner) => RefreshError(Box::new(inner)),
+            _ => RefreshError(Box::new(error)),
+        }
+    }
+}
+
+impl From<reqwest::Error> for RefreshError {
+    fn from(error: reqwest::Error) -> Self {
+        RefreshError(Box::new(error))
     }
 }
 
@@ -52,43 +67,41 @@ pub struct DataStatus {
     pub current_state: Option<State>
 }
 
-pub fn refresh_state(pool: &PgConnection) {
-    let status = get_data_status(pool);
+pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
+    let status = get_data_status(&pool).await?;
     match status.state_info {
         Some(state_info) => {
             let up_to_date = status
                 .current_state
-                .as_ref()
-                .filter(|s| s.version == state_info.version)
-                .is_some();
+                .exists(|s| s.version == state_info.version);
 
             if up_to_date {
                 info!("Data already up to date (state: {})", state_info.version);
             } else {
                 info!("Updating data...");
-                match update_state(pool, state_info) {
-                    Ok(_) => { info!("Successfuly updated data"); },
+                match update_state(&pool, state_info).await {
+                    Ok(_) => { info!("Successfully updated data"); },
                     Err(err) => {
                         if status.current_state.is_none() {
                             panic!("Couldn't update data, and no fallback is available");
-                        } else {
-                            error!("Error while updating state: {}", err);
-                        };
+                        }
+                        return Err(err);
                     },
-                };
+                }
             }
         },
         None => {
             if status.current_state.is_none() {
-                panic!("Couldn't fetch data, and no fallback is available");
+                panic!("Couldn't fetch data info, and no fallback is available");
             } else {
-                info!("Falling back");
-            };
+                info!("Falling back to current state");
+            }
         }
     }
+    Ok(())
 }
 
-fn get_info<R: std::io::Read>(response: R) -> Option<StateInfo> {
+fn get_state_info<R: std::io::Read>(response: R) -> Option<StateInfo> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(response);
@@ -114,62 +127,95 @@ fn get_info<R: std::io::Read>(response: R) -> Option<StateInfo> {
         })
 }
 
-pub fn get_data_status(conn: &PgConnection) -> DataStatus {
+pub async fn get_data_status(pool: &Pool) -> Result<DataStatus, RefreshError> {
     info!("Fetching state info at {}", STATE_INFO_URL);
-    let response = reqwest::get(STATE_INFO_URL);
-    let current_state = current_state(&conn);
+    let response = reqwest::get(STATE_INFO_URL).await;
+    let conn = pool.get().unwrap();
+    let current_state = web::block(move || {
+        // To help web::block type inference
+        Ok(current_state(&conn)) as Result<Option<State>, RefreshError>
+    })
+    .await?;
+
     match response {
         Ok(resp) => {
-            let state_info = get_info(resp);
-            DataStatus { state_info, current_state }
+            match resp.bytes().await {
+               Ok(bytes) => {
+                   let state_info = web::block(move || {
+                       let state_info = get_state_info(std::io::Cursor::new(&bytes));
+                       // To help web::block type inference
+                       Ok(state_info) as Result<Option<StateInfo>, RefreshError>
+                   })
+                   .await?;
+                   Ok(DataStatus { state_info, current_state })
+               }
+               Err(err) => {
+                   error!("Error getting bytes from response: {}", err);
+                   Ok(DataStatus { state_info: None, current_state })
+               }
+            }
         },
         Err(err) => {
             error!("Error fetching state info: {}", err);
-            DataStatus { state_info: None, current_state }
+            Ok(DataStatus { state_info: None, current_state })
         },
     }
 }
 
-fn update_state(
-    conn: &PgConnection,
+async fn update_state(
+    pool: &Pool,
     state_info: StateInfo
 ) -> Result<(), RefreshError> {
     info!("Downloading state version {} from {}", state_info.version, state_info.url);
+    let req = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()?
+        .get(&state_info.url);
 
-    let mut resp = reqwest::get(&state_info.url).map_err(|err| Network(Box::new(err)))?;
-    let mut buf: Vec<u8> = Vec::with_capacity(APPROXIMATE_ZIP_SIZE_BYTES);
-    resp.copy_to(&mut buf).map_err(|err| Network(Box::new(err)))?;
-    info!("Downloaded zip, size: {} MB", buf.len() / 1_000_000);
+    let resp_bytes = req
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    info!("Downloaded zip, size: {} MB", resp_bytes.len() / 1_000_000);
     info!("Searching for csv file");
 
-    let reader = std::io::Cursor::new(&buf);
-    let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
-    let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
-    for i in 0..zip.len() {
-        let file = zip.by_index(i).unwrap();
-        info!("File: {}", file.name());
-        if re.is_match(file.name()) {
-            info!("Found csv file");
-            info!("Updating database records...");
-            let mut reader = csv::Reader::from_reader(file);
+    let conn = pool.get().unwrap();
+    web::block(move || {
+        let reader = std::io::Cursor::new(&resp_bytes);
+        let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
+        let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
+        for i in 0..zip.len() {
+            let file = zip.by_index(i).unwrap();
+            info!("File: {}", file.name());
+            if re.is_match(file.name()) {
+                info!("Found csv file");
+                info!("Updating database records...");
+                let mut reader = csv::Reader::from_reader(file);
 
-            let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
-            let progress_bar = ProgressBar::new(state_info.address_count as u64);
-            for record in reader.deserialize() {
-                let address_record: AddressRecord = record.expect("Could not deserialize post code record");
-                batch.push(address_record);
-                if batch.len() == BATCH_SIZE {
-                    process_batch(&conn, &mut batch, &progress_bar);
-                }
-            };
-            process_batch(&conn, &mut batch, &progress_bar);
-            progress_bar.finish();
+                let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
+                let progress_bar = ProgressBar::new(state_info.address_count as u64);
+                for record in reader.deserialize() {
+                    let address_record: AddressRecord = record.expect("Could not deserialize post code record");
+                    batch.push(address_record);
+                    if batch.len() == BATCH_SIZE {
+                        process_batch(&conn, &mut batch, &progress_bar)?;
+                    }
+                };
+                process_batch(&conn, &mut batch, &progress_bar)?;
+                progress_bar.finish();
 
-            create_new_state(&conn, &state_info);
-            info!("Done");
-            break;
+                create_new_state(&conn, &state_info)?;
+                info!("Done");
+                break;
+            }
         }
-    }
+
+        // To help web::block type inference
+        Ok(()) as Result<(), RefreshError>
+    })
+    .await?;
 
     Ok(())
 }
@@ -189,16 +235,18 @@ fn process_batch(
     conn: &PgConnection,
     batch: &mut Vec<AddressRecord>,
     progress_bar: &ProgressBar
-) {
-    create_or_update_addresses(&conn, &batch);
+) -> Result<(), diesel::result::Error> {
+    create_or_update_addresses(&conn, &batch)?;
     progress_bar.inc(batch.len() as u64);
     batch.clear();
+
+    Ok(())
 }
 
 pub fn create_or_update_addresses<'a>(
     conn: &PgConnection,
     records: &[AddressRecord]
-) {
+) -> Result<usize, diesel::result::Error> {
     use crate::schema::addresses::dsl::*;
 
     // Filter duplicates because the same address sometimes has multiple
@@ -225,7 +273,7 @@ pub fn create_or_update_addresses<'a>(
         .values()
         .collect::<Vec<&NewAddress>>();
 
-    let result = diesel::insert_into(addresses)
+    diesel::insert_into(addresses)
         .values(new_addresses)
         .on_conflict((postcode, number))
         .do_update()
@@ -236,14 +284,13 @@ pub fn create_or_update_addresses<'a>(
             city.eq(excluded(city)),
             region.eq(excluded(region))
         ))
-        .execute(conn);
-
-    if let Err(err) = result {
-        error!("Error saving new address: {}", err);
-    }
+        .execute(conn)
 }
 
-fn create_new_state(conn: &PgConnection, state_info: &StateInfo) {
+fn create_new_state(
+    conn: &PgConnection,
+    state_info: &StateInfo
+) -> Result<usize, diesel::result::Error> {
     use crate::schema::states::dsl::*;
 
     let new_state = NewState {
@@ -253,13 +300,9 @@ fn create_new_state(conn: &PgConnection, state_info: &StateInfo) {
         processed_at: Utc::now().naive_utc()
     };
 
-    let result = diesel::insert_into(states)
+    diesel::insert_into(states)
         .values(new_state)
-        .execute(conn);
-
-    if let Err(err) = result {
-        error!("Could not create new state: {}", err);
-    }
+        .execute(conn)
 }
 
 pub fn get_addresses(
