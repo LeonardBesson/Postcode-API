@@ -167,10 +167,12 @@ async fn update_state(
     state_info: StateInfo
 ) -> Result<(), RefreshError> {
     info!("Downloading state version {} from {}", state_info.version, state_info.url);
-    let resp_bytes = reqwest::Client::builder()
+    let req = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()?
-        .get(&state_info.url)
+        .get(&state_info.url);
+
+    let resp_bytes = req
         .send()
         .await?
         .bytes()
