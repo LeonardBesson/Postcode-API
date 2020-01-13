@@ -135,8 +135,7 @@ pub async fn get_data_status(pool: &Pool) -> Result<DataStatus, RefreshError> {
         // To help web::block type inference
         Ok(current_state(&conn)) as Result<Option<State>, RefreshError>
     })
-    .await
-    .unwrap_or(None);
+    .await?;
 
     match response {
         Ok(resp) => {
