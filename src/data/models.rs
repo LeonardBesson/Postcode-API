@@ -2,8 +2,8 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::schema::addresses;
-use crate::schema::states;
+use crate::data::schema::addresses;
+use crate::data::schema::states;
 
 #[derive(Queryable, Debug)]
 pub struct State {

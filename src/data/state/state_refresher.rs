@@ -1,7 +1,9 @@
 use std::time::Duration;
-use crate::db::Pool;
-use crate::data::refresh_state;
+
 use log::{error, info};
+
+use crate::data::state::refresh_state;
+use crate::db::Pool;
 
 pub struct StateRefresher {
     pub interval: Duration,

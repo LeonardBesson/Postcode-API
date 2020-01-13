@@ -5,55 +5,25 @@ extern crate diesel_migrations;
 extern crate dotenv;
 
 use std::io;
+use std::time::Duration;
 
-use actix_web::{App, Error, HttpResponse, HttpServer, web};
+use actix_web::{App, HttpServer, web};
 use actix_web::middleware::Logger;
 use env_logger;
 use log::error;
-use serde::Deserialize;
 
-use crate::data::{get_addresses, refresh_state};
-use crate::db::{init_connection_pool, Pool};
-use crate::state_refresher::StateRefresher;
-use std::time::Duration;
+use crate::api::addresses::addresses;
+use crate::data::state::refresh_state;
+use crate::data::state::state_refresher::StateRefresher;
+use crate::db::init_connection_pool;
 
-mod schema;
+mod api;
 mod data;
 mod db;
-mod models;
-mod tests;
-mod state_refresher;
+mod api_tests;
 mod utils;
 
 const DATA_REFRESH_INTERVAL_SECS: u64 = 3600 * 24;
-
-#[derive(Deserialize)]
-pub struct AddressRequest {
-    postcode: String,
-    number: Option<String>
-}
-
-async fn addresses(
-    request: web::Query<AddressRequest>,
-    pool: web::Data<Pool>
-) -> Result<HttpResponse, Error> {
-    let result = web::block(move || {
-        get_addresses(
-            pool,
-            &request.postcode,
-            request.number.as_ref().map(|n| n.as_str())
-        )
-    })
-    .await;
-
-    match result {
-        Ok(addresses) => { Ok(HttpResponse::Ok().json(addresses)) },
-        Err(err) => {
-            error!("Error while retrieving addresses: {}", err);
-            Ok(HttpResponse::InternalServerError().finish())
-        },
-    }
-}
 
 embed_migrations!("./migrations");
 

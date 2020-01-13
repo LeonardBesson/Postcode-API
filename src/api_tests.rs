@@ -6,14 +6,14 @@ mod tests {
         http::StatusCode, test, web,
     };
     use diesel::RunQueryDsl;
+    use futures::FutureExt;
 
     use lazy_static::lazy_static;
 
     use crate::addresses;
-    use crate::data::create_or_update_addresses;
+    use crate::data::models::{Address, AddressRecord};
+    use crate::data::repo::addresses::create_or_update_addresses;
     use crate::db::{init_test_connection_pool, Pool};
-    use crate::models::{Address, AddressRecord};
-    use futures::FutureExt;
 
     embed_migrations!("./migrations");
 
@@ -42,7 +42,7 @@ mod tests {
     }
 
     async fn setup() {
-        use crate::schema::addresses;
+        use crate::data::schema::addresses;
         // Clear data from previous tests
         web::block(|| {
             diesel::delete(addresses::table)
