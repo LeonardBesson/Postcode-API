@@ -170,11 +170,7 @@ pub async fn get_data_status(pool: &Pool) -> Result<DataStatus, RefreshError> {
     info!("Fetching state info at {}", STATE_INFO_URL);
     let response = reqwest::get(STATE_INFO_URL).await;
     let conn = pool.get().unwrap();
-    let current_state = web::block(move || {
-        // To help web::block type inference
-        Ok(current_state(&conn)) as Result<Option<State>, RefreshError>
-    })
-    .await?;
+    let current_state = web::block(move || current_state(&conn)).await?;
 
     match response {
         Ok(resp) => {
@@ -275,15 +271,14 @@ fn process_data_response(
     Ok(())
 }
 
-fn current_state(connection: &PgConnection) -> Option<State> {
+fn current_state(conn: &PgConnection) -> Result<Option<State>, diesel::result::Error> {
     use crate::schema::states::dsl::*;
 
     states
         .order(processed_at.desc())
         .limit(1)
-        .first(connection)
+        .first(conn)
         .optional()
-        .unwrap_or(None)
 }
 
 fn process_batch(
