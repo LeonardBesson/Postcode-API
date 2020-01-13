@@ -82,7 +82,7 @@ pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
                 match update_state(&pool, state_info).await {
                     Ok(_) => { info!("Successfully updated data"); },
                     Err(err) => {
-                        if status.current_state.is_some() {
+                        if status.current_state.is_none() {
                             panic!("Couldn't update data, and no fallback is available");
                         }
                         return Err(err);
