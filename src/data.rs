@@ -24,32 +24,68 @@ const STATE_INFO_URL: &str = "http://results.openaddresses.io/state.txt";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36";
 
 #[derive(Debug)]
-pub struct RefreshError(Box<dyn std::fmt::Debug + Send>);
+pub enum RefreshError {
+    IO(Box<dyn std::fmt::Debug + Send>),
+    InvalidZip(Box<zip::result::ZipError>),
+    InvalidData(Box<dyn std::fmt::Debug + Send>),
+    FileNotFound
+}
 
 impl std::fmt::Display for RefreshError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}", format!("Refresh error: {:?}", self.0))
+        let msg = match self {
+            RefreshError::IO(inner) => {
+                format!("IO: {:?}", inner)
+            },
+            RefreshError::InvalidZip(inner) => {
+                format!("Invalid zip data file: {}", inner)
+            },
+            RefreshError::InvalidData(inner) => {
+                format!("Invalid address data: {:?}", inner)
+            },
+            RefreshError::FileNotFound => {
+                "Could not find data file".into()
+            }
+        };
+        write!(f, "Refresh error: {}", msg)
     }
 }
 
 impl From<diesel::result::Error> for RefreshError {
     fn from(error: diesel::result::Error) -> Self {
-        RefreshError(Box::new(error))
+        RefreshError::IO(Box::new(error))
     }
 }
 
-impl <E: std::fmt::Debug + Send + 'static> From<actix_web::error::BlockingError<E>> for RefreshError {
+impl <E> From<actix_web::error::BlockingError<E>> for RefreshError
+where
+    E: std::fmt::Debug + Send + 'static,
+{
     fn from(error: actix_web::error::BlockingError<E>) -> Self {
         match error {
-            actix_web::error::BlockingError::Error(inner) => RefreshError(Box::new(inner)),
-            _ => RefreshError(Box::new(error)),
+            actix_web::error::BlockingError::Error(inner) =>
+                RefreshError::IO(Box::new(inner)),
+            _ =>
+                RefreshError::IO(Box::new(error)),
         }
     }
 }
 
 impl From<reqwest::Error> for RefreshError {
     fn from(error: reqwest::Error) -> Self {
-        RefreshError(Box::new(error))
+        RefreshError::IO(Box::new(error))
+    }
+}
+
+impl From<zip::result::ZipError> for RefreshError {
+    fn from(error: zip::result::ZipError) -> Self {
+        RefreshError::InvalidZip(Box::new(error))
+    }
+}
+
+impl From<csv::Error> for RefreshError {
+    fn from(error: csv::Error) -> Self {
+        RefreshError::InvalidData(Box::new(error))
     }
 }
 
@@ -83,7 +119,10 @@ pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
                     Ok(_) => { info!("Successfully updated data"); },
                     Err(err) => {
                         if status.current_state.is_none() {
-                            panic!("Couldn't update data, and no fallback is available");
+                            panic!(
+                                "Couldn't update data, and no fallback is available:\n{}",
+                                err
+                            );
                         }
                         return Err(err);
                     },
@@ -183,39 +222,55 @@ async fn update_state(
 
     let conn = pool.get().unwrap();
     web::block(move || {
-        let reader = std::io::Cursor::new(&resp_bytes);
-        let mut zip = ZipArchive::new(reader).expect("Could not create zip archive");
-        let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
-        for i in 0..zip.len() {
-            let file = zip.by_index(i).unwrap();
-            info!("File: {}", file.name());
-            if re.is_match(file.name()) {
-                info!("Found csv file");
-                info!("Updating database records...");
-                let mut reader = csv::Reader::from_reader(file);
-
-                let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
-                let progress_bar = ProgressBar::new(state_info.address_count as u64);
-                for record in reader.deserialize() {
-                    let address_record: AddressRecord = record.expect("Could not deserialize post code record");
-                    batch.push(address_record);
-                    if batch.len() == BATCH_SIZE {
-                        process_batch(&conn, &mut batch, &progress_bar)?;
-                    }
-                };
-                process_batch(&conn, &mut batch, &progress_bar)?;
-                progress_bar.finish();
-
-                create_new_state(&conn, &state_info)?;
-                info!("Done");
-                break;
-            }
-        }
-
-        // To help web::block type inference
-        Ok(()) as Result<(), RefreshError>
+        process_data_response(
+            state_info,
+            &resp_bytes,
+            &conn
+        )
     })
     .await?;
+
+    Ok(())
+}
+
+fn process_data_response(
+    state_info: StateInfo,
+    bytes: &bytes::Bytes,
+    conn: &PgConnection
+) -> Result<(), RefreshError> {
+    let reader = std::io::Cursor::new(&bytes);
+    let mut zip = ZipArchive::new(reader)?;
+    let re = Regex::new(r"nl.*\.csv").expect("Could not create regex");
+    let mut found = false;
+    for i in 0..zip.len() {
+        let file = zip.by_index(i)?;
+        info!("File: {}", file.name());
+        if re.is_match(file.name()) {
+            info!("Found csv file");
+            info!("Updating database records...");
+            let mut reader = csv::Reader::from_reader(file);
+
+            let mut batch = Vec::<AddressRecord>::with_capacity(BATCH_SIZE);
+            let progress_bar = ProgressBar::new(state_info.address_count as u64);
+            for record in reader.deserialize() {
+                let address_record: AddressRecord = record?;
+                batch.push(address_record);
+                if batch.len() == BATCH_SIZE {
+                    process_batch(&conn, &mut batch, &progress_bar)?;
+                }
+            };
+            process_batch(&conn, &mut batch, &progress_bar)?;
+            progress_bar.finish();
+
+            create_new_state(&conn, &state_info)?;
+            info!("Done");
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err(RefreshError::FileNotFound)
+    }
 
     Ok(())
 }

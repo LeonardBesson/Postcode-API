@@ -28,7 +28,8 @@ mod tests {
     }
 
     async fn run_test<F, R>(test: F) -> R
-        where F: std::future::Future<Output = R>
+    where
+        F: std::future::Future<Output = R>,
     {
         setup().await;
         // Make the fut UnwindSafe in order to catch unwind it.
