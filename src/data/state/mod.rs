@@ -68,6 +68,7 @@ pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
             }
         }
     }
+
     Ok(())
 }
 
@@ -91,7 +92,8 @@ fn get_state_info<R: std::io::Read>(reader: R) -> Result<Option<StateInfo>, Refr
             }))
         }
     }
-    return Ok(None);
+
+    Ok(None)
 }
 
 pub async fn get_data_status(pool: &Pool) -> Result<DataStatus, RefreshError> {

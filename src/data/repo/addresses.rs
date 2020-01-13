@@ -27,7 +27,7 @@ pub fn get_addresses(
         .load(&pool.get().unwrap())
 }
 
-pub fn create_or_update_addresses<'a>(
+pub fn create_or_update_addresses(
     conn: &PgConnection,
     records: &[AddressRecord]
 ) -> Result<usize, diesel::result::Error> {
