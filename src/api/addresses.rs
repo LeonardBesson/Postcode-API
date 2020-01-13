@@ -22,7 +22,7 @@ pub async fn addresses(
             request.number.as_ref().map(|n| n.as_str())
         )
     })
-        .await;
+    .await;
 
     match result {
         Ok(addresses) => { Ok(HttpResponse::Ok().json(addresses)) },
