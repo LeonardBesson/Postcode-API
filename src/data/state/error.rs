@@ -5,7 +5,7 @@ pub enum RefreshError {
     IO(Box<dyn std::fmt::Debug + Send>),
     InvalidZip(Box<zip::result::ZipError>),
     InvalidData(Box<dyn std::fmt::Debug + Send>),
-    FileNotFound
+    FileNotFound,
 }
 
 impl std::fmt::Display for RefreshError {

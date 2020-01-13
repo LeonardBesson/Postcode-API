@@ -71,30 +71,27 @@ pub async fn refresh_state(pool: &Pool) -> Result<(), RefreshError> {
     Ok(())
 }
 
-fn get_state_info<R: std::io::Read>(reader: R) -> Option<StateInfo> {
+fn get_state_info<R: std::io::Read>(reader: R) -> Result<Option<StateInfo>, RefreshError> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(reader);
 
-    reader
-        .records()
-        .find(|record| {
-            record.is_ok() &&
-                record
-                    .as_ref()
-                    .unwrap()
-                    .as_slice()
-                    .starts_with("nl/countrywide.json")
-        })
-        .map(|record| {
-            let r = record.unwrap();
-            StateInfo {
-                address_count: r[4].parse::<usize>().unwrap(),
+    for record in reader.records() {
+        let r = record?;
+        if r.as_slice().starts_with("nl/countrywide.json") {
+            let address_count = r[4]
+                .parse::<usize>()
+                .map_err(|err| RefreshError::InvalidData(Box::new(err)))?;
+
+            return Ok(Some(StateInfo {
+                address_count,
                 url: r[8].to_owned(),
                 hash: r[10].to_owned(),
                 version: r[15].to_owned()
-            }
-        })
+            }))
+        }
+    }
+    return Ok(None);
 }
 
 pub async fn get_data_status(pool: &Pool) -> Result<DataStatus, RefreshError> {
@@ -108,9 +105,8 @@ pub async fn get_data_status(pool: &Pool) -> Result<DataStatus, RefreshError> {
             match resp.bytes().await {
                 Ok(bytes) => {
                     let state_info = web::block(move || {
-                        let state_info = get_state_info(std::io::Cursor::new(&bytes));
-                        // To help web::block type inference
-                        Ok(state_info) as Result<Option<StateInfo>, RefreshError>
+                        let cursor = std::io::Cursor::new(&bytes);
+                        get_state_info(cursor)
                     })
                     .await?;
                     Ok(DataStatus { state_info, current_state })
